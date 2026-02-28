@@ -104,9 +104,8 @@ def _font_tier(ch: str) -> int:
     if cp in _SYMBOLA_CODEPOINTS:
         return 2
     # CJK Unified Ideographs + CJK compat + fullwidth forms + Hangul + known Noto-only codepoints
-    if (
-        cp in _NOTO_CODEPOINTS
-        or cp >= 0x1100
+    if cp in _NOTO_CODEPOINTS or (
+        cp >= 0x1100
         and (
             cp <= 0x11FF  # Hangul Jamo
             or 0x2E80 <= cp <= 0x9FFF  # CJK radicals, kangxi, ideographs
