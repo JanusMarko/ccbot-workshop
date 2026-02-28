@@ -291,8 +291,9 @@ class SessionMonitor:
                     # For new sessions, initialize offset to end of file
                     # to avoid re-processing old messages
                     try:
-                        file_size = session_info.file_path.stat().st_size
-                        current_mtime = session_info.file_path.stat().st_mtime
+                        st = session_info.file_path.stat()
+                        file_size = st.st_size
+                        current_mtime = st.st_mtime
                     except OSError:
                         file_size = 0
                         current_mtime = 0.0
