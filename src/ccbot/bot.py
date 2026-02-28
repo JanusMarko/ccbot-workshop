@@ -970,7 +970,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         subdir_name = cached_dirs[idx]
 
-        default_path = str(Path.cwd())
+        default_path = config.browse_root or str(Path.cwd())
         current_path = (
             context.user_data.get(BROWSE_PATH_KEY, default_path)
             if context.user_data
@@ -1000,7 +1000,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if pending_tid is not None and _get_thread_id(update) != pending_tid:
             await query.answer("Stale browser (topic mismatch)", show_alert=True)
             return
-        default_path = str(Path.cwd())
+        default_path = config.browse_root or str(Path.cwd())
         current_path = (
             context.user_data.get(BROWSE_PATH_KEY, default_path)
             if context.user_data
@@ -1033,7 +1033,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         except ValueError:
             await query.answer("Invalid data")
             return
-        default_path = str(Path.cwd())
+        default_path = config.browse_root or str(Path.cwd())
         current_path = (
             context.user_data.get(BROWSE_PATH_KEY, default_path)
             if context.user_data
@@ -1049,7 +1049,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.answer()
 
     elif data == CB_DIR_CONFIRM:
-        default_path = str(Path.cwd())
+        default_path = config.browse_root or str(Path.cwd())
         selected_path = (
             context.user_data.get(BROWSE_PATH_KEY, default_path)
             if context.user_data
