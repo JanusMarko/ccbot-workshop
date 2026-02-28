@@ -112,7 +112,7 @@ def build_directory_browser(
     """
     path = Path(current_path).expanduser().resolve()
     if not path.exists() or not path.is_dir():
-        path = Path.cwd()
+        path = Path(config.browse_root) if config.browse_root else Path.cwd()
 
     try:
         subdirs = sorted(
