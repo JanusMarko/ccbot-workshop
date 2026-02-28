@@ -93,6 +93,9 @@ class Config:
             os.getenv("CCBOT_SHOW_HIDDEN_DIRS", "").lower() == "true"
         )
 
+        # Starting directory for the directory browser
+        self.browse_root = os.getenv("CCBOT_BROWSE_ROOT", "")
+
         # Scrub sensitive vars from os.environ so child processes never inherit them.
         # Values are already captured in Config attributes above.
         for var in SENSITIVE_ENV_VARS:
@@ -100,12 +103,13 @@ class Config:
 
         logger.debug(
             "Config initialized: dir=%s, token=%s..., allowed_users=%d, "
-            "tmux_session=%s, claude_projects_path=%s",
+            "tmux_session=%s, claude_projects_path=%s, browse_root=%s",
             self.config_dir,
             self.telegram_bot_token[:8],
             len(self.allowed_users),
             self.tmux_session_name,
             self.claude_projects_path,
+            self.browse_root,
         )
 
     def is_user_allowed(self, user_id: int) -> bool:
