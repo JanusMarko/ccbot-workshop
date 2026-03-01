@@ -359,7 +359,10 @@ class SessionMonitor:
             except OSError as e:
                 logger.debug(f"Error processing session {session_info.session_id}: {e}")
 
-        self.state.save_if_dirty()
+        # NOTE: save_if_dirty() is intentionally NOT called here.
+        # Offsets must be persisted only AFTER delivery to Telegram (in
+        # _monitor_loop) to guarantee at-least-once delivery.  Saving before
+        # delivery would risk silent message loss on crash.
         return new_messages
 
     async def _load_current_session_map(self) -> dict[str, str]:
@@ -490,6 +493,12 @@ class SessionMonitor:
                             await self._message_callback(msg)
                         except Exception as e:
                             logger.error(f"Message callback error: {e}")
+
+                # Persist byte offsets AFTER delivering messages to Telegram.
+                # This guarantees at-least-once delivery: if the bot crashes
+                # before this save, messages will be re-read and re-delivered
+                # on restart (safe duplicate) rather than silently lost.
+                self.state.save_if_dirty()
 
             except Exception as e:
                 logger.error(f"Monitor loop error: {e}")
