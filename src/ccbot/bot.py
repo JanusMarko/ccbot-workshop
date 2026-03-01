@@ -1181,14 +1181,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                         created_wname,
                         len(pending_text),
                     )
-                    if context.user_data is not None:
-                        context.user_data.pop("_pending_thread_text", None)
-                        context.user_data.pop("_pending_thread_id", None)
                     send_ok, send_msg = await session_manager.send_to_window(
                         created_wid,
                         pending_text,
                     )
-                    if not send_ok:
+                    if send_ok:
+                        # Clear pending text only after successful send
+                        if context.user_data is not None:
+                            context.user_data.pop("_pending_thread_text", None)
+                            context.user_data.pop("_pending_thread_id", None)
+                    else:
                         logger.warning("Failed to forward pending text: %s", send_msg)
                         await safe_send(
                             context.bot,
@@ -1282,14 +1284,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         pending_text = (
             context.user_data.get("_pending_thread_text") if context.user_data else None
         )
-        if context.user_data is not None:
-            context.user_data.pop("_pending_thread_text", None)
-            context.user_data.pop("_pending_thread_id", None)
         if pending_text:
             send_ok, send_msg = await session_manager.send_to_window(
                 selected_wid, pending_text
             )
-            if not send_ok:
+            if send_ok:
+                # Clear pending text only after successful send
+                if context.user_data is not None:
+                    context.user_data.pop("_pending_thread_text", None)
+                    context.user_data.pop("_pending_thread_id", None)
+            else:
                 logger.warning("Failed to forward pending text: %s", send_msg)
                 await safe_send(
                     context.bot,
@@ -1297,6 +1301,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     f"❌ Failed to send pending message: {send_msg}",
                     message_thread_id=thread_id,
                 )
+        elif context.user_data is not None:
+            # No pending text — clean up thread_id tracking
+            context.user_data.pop("_pending_thread_id", None)
         await query.answer("Bound")
 
     # Window picker: new session → transition to directory browser
