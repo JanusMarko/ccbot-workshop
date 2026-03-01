@@ -17,7 +17,7 @@ Responsibilities:
 Key class: SessionManager (singleton instantiated as `session_manager`).
 Key methods for thread binding access:
   - resolve_window_for_thread: Get window_id for a user's thread
-  - iter_thread_bindings: Generator for iterating all (user_id, thread_id, window_id)
+  - all_thread_bindings: Snapshot list of all (user_id, thread_id, window_id)
   - find_users_for_session: Find all users bound to a session_id
 """
 
@@ -26,7 +26,6 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from collections.abc import Iterator
 from typing import Any
 
 import aiofiles
@@ -737,15 +736,18 @@ class SessionManager:
             return None
         return self.get_window_for_thread(user_id, thread_id)
 
-    def iter_thread_bindings(self) -> Iterator[tuple[int, int, str]]:
-        """Iterate all thread bindings as (user_id, thread_id, window_id).
+    def all_thread_bindings(self) -> list[tuple[int, int, str]]:
+        """Return a snapshot of all thread bindings as (user_id, thread_id, window_id).
 
-        Provides encapsulated access to thread_bindings without exposing
-        the internal data structure directly.
+        Returns a new list each call so callers can safely await between
+        iterations without risking ``RuntimeError: dictionary changed size
+        during iteration`` from a concurrent ``unbind_thread`` call.
         """
-        for user_id, bindings in self.thread_bindings.items():
-            for thread_id, window_id in bindings.items():
-                yield user_id, thread_id, window_id
+        return [
+            (user_id, thread_id, window_id)
+            for user_id, bindings in self.thread_bindings.items()
+            for thread_id, window_id in bindings.items()
+        ]
 
     async def find_users_for_session(
         self,
@@ -756,7 +758,7 @@ class SessionManager:
         Returns list of (user_id, window_id, thread_id) tuples.
         """
         result: list[tuple[int, str, int]] = []
-        for user_id, thread_id, window_id in self.iter_thread_bindings():
+        for user_id, thread_id, window_id in self.all_thread_bindings():
             resolved = await self.resolve_session_for_window(window_id)
             if resolved and resolved.session_id == session_id:
                 result.append((user_id, window_id, thread_id))

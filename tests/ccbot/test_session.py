@@ -25,12 +25,43 @@ class TestThreadBindings:
     def test_unbind_nonexistent_returns_none(self, mgr: SessionManager) -> None:
         assert mgr.unbind_thread(100, 999) is None
 
-    def test_iter_thread_bindings(self, mgr: SessionManager) -> None:
+    def test_all_thread_bindings(self, mgr: SessionManager) -> None:
         mgr.bind_thread(100, 1, "@1")
         mgr.bind_thread(100, 2, "@2")
         mgr.bind_thread(200, 3, "@3")
-        result = set(mgr.iter_thread_bindings())
+        result = set(mgr.all_thread_bindings())
         assert result == {(100, 1, "@1"), (100, 2, "@2"), (200, 3, "@3")}
+
+    def test_all_thread_bindings_returns_list(self, mgr: SessionManager) -> None:
+        """all_thread_bindings must return a list (snapshot), not a generator.
+
+        A generator would hold a live reference into the internal dict and could
+        raise RuntimeError if an async coroutine calls unbind_thread between two
+        consumed values.  A list snapshot is safe across await points.
+        """
+        mgr.bind_thread(100, 1, "@1")
+        result = mgr.all_thread_bindings()
+        assert isinstance(result, list)
+
+    def test_all_thread_bindings_snapshot_is_independent(
+        self, mgr: SessionManager
+    ) -> None:
+        """Mutating thread_bindings after calling all_thread_bindings must not
+        affect the already-returned snapshot."""
+        mgr.bind_thread(100, 1, "@1")
+        mgr.bind_thread(100, 2, "@2")
+        snapshot = mgr.all_thread_bindings()
+        # Mutate the live dict after snapshot was taken — the snapshot must
+        # be unaffected (this is the property that prevents RuntimeError
+        # when unbind_thread runs between await points in async callers)
+        mgr.unbind_thread(100, 1)
+        assert (100, 1, "@1") in snapshot
+        assert len(snapshot) == 2
+
+    def test_all_thread_bindings_empty(self, mgr: SessionManager) -> None:
+        """all_thread_bindings returns an empty list when nothing is bound."""
+        result = mgr.all_thread_bindings()
+        assert result == []
 
 
 class TestGroupChatId:
