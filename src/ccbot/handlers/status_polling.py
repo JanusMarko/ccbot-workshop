@@ -28,6 +28,7 @@ from ..terminal_parser import is_interactive_ui, parse_status_line
 from ..tmux_manager import tmux_manager
 from .interactive_ui import (
     clear_interactive_msg,
+    get_interactive_msg_id,
     get_interactive_window,
     handle_interactive_ui,
 )
@@ -93,6 +94,15 @@ async def update_status_message(
     # Check for permission prompt (interactive UI not triggered via JSONL)
     # ALWAYS check UI, regardless of skip_status
     if should_check_new_ui and is_interactive_ui(pane_text):
+        # Skip if another path (e.g. JSONL monitor) already sent an interactive
+        # message for this user/thread — avoids duplicate messages
+        if get_interactive_msg_id(user_id, thread_id):
+            logger.debug(
+                "Interactive UI already tracked for user=%d thread=%s, skipping",
+                user_id,
+                thread_id,
+            )
+            return
         logger.debug(
             "Interactive UI detected in polling (user=%d, window=%s, thread=%s)",
             user_id,

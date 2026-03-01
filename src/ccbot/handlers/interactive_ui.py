@@ -15,6 +15,7 @@ State dicts are keyed by (user_id, thread_id_or_0) for Telegram topic support.
 """
 
 import logging
+import time
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -44,6 +45,10 @@ _interactive_msgs: dict[tuple[int, int], int] = {}
 
 # Track interactive mode: (user_id, thread_id_or_0) -> window_id
 _interactive_mode: dict[tuple[int, int], str] = {}
+
+# Deduplication: monotonic timestamp of last new interactive message send
+_last_interactive_send: dict[tuple[int, int], float] = {}
+_INTERACTIVE_DEDUP_WINDOW = 2.0  # seconds — suppress duplicate sends within this window
 
 
 def get_interactive_window(user_id: int, thread_id: int | None = None) -> str | None:
@@ -210,6 +215,23 @@ async def handle_interactive_ui(
             _interactive_msgs.pop(ikey, None)
             # Fall through to send new message
 
+    # Dedup guard: prevent both JSONL monitor and status poller from sending
+    # a new interactive message in the same short window.  No await between
+    # check and set, so this is atomic in the asyncio event loop.
+    last_send = _last_interactive_send.get(ikey, 0.0)
+    now = time.monotonic()
+    if now - last_send < _INTERACTIVE_DEDUP_WINDOW:
+        logger.debug(
+            "Dedup: skipping duplicate interactive UI send "
+            "(user=%d, thread=%s, %.1fs since last)",
+            user_id,
+            thread_id,
+            now - last_send,
+        )
+        _interactive_mode[ikey] = window_id
+        return True
+    _last_interactive_send[ikey] = now
+
     # Send new message (plain text — terminal content is not markdown)
     logger.info(
         "Sending interactive UI to user %d for window_id %s", user_id, window_id
@@ -223,6 +245,7 @@ async def handle_interactive_ui(
             **thread_kwargs,  # type: ignore[arg-type]
         )
     except Exception as e:
+        _last_interactive_send.pop(ikey, None)
         logger.error("Failed to send interactive UI: %s", e)
         return False
     if sent:
@@ -241,6 +264,7 @@ async def clear_interactive_msg(
     ikey = (user_id, thread_id or 0)
     msg_id = _interactive_msgs.pop(ikey, None)
     _interactive_mode.pop(ikey, None)
+    _last_interactive_send.pop(ikey, None)
     logger.debug(
         "Clear interactive msg: user=%d, thread=%s, msg_id=%s",
         user_id,
