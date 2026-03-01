@@ -105,9 +105,9 @@ from .handlers.interactive_ui import (
 )
 from .handlers.message_queue import (
     clear_status_msg_info,
+    enqueue_callable,
     enqueue_content_message,
     enqueue_status_update,
-    get_message_queue,
     shutdown_workers,
 )
 from .handlers.message_sender import (
@@ -1539,30 +1539,38 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
     for user_id, wid, thread_id in active_users:
         # Handle interactive tools specially - capture terminal and send UI
         if msg.tool_name in INTERACTIVE_TOOL_NAMES and msg.content_type == "tool_use":
-            # Mark interactive mode BEFORE sleeping so polling skips this window
+            # Mark interactive mode BEFORE enqueuing so polling skips this window
             set_interactive_mode(user_id, wid, thread_id)
-            # Flush pending messages (e.g. plan content) before sending interactive UI
-            queue = get_message_queue(user_id)
-            if queue:
-                await queue.join()
-            # Wait briefly for Claude Code to render the question UI
-            await asyncio.sleep(0.3)
-            handled = await handle_interactive_ui(bot, user_id, wid, thread_id)
-            if handled:
-                # Update user's read offset
-                session = await session_manager.resolve_session_for_window(wid)
-                if session and session.file_path:
-                    try:
-                        file_size = Path(session.file_path).stat().st_size
-                        session_manager.update_user_window_offset(
-                            user_id, wid, file_size
-                        )
-                    except OSError:
-                        pass
-                continue  # Don't send the normal tool_use message
-            else:
-                # UI not rendered — clear the early-set mode
-                clear_interactive_mode(user_id, thread_id)
+
+            # Enqueue the interactive UI handling as a callable task so it
+            # executes AFTER all pending content messages already in the queue,
+            # without blocking the monitor loop or any other session's processing.
+            async def _send_interactive_ui(
+                _bot: Bot = bot,
+                _user_id: int = user_id,
+                _wid: str = wid,
+                _thread_id: int | None = thread_id,
+            ) -> None:
+                # Wait briefly for Claude Code to render the question UI
+                await asyncio.sleep(0.3)
+                handled = await handle_interactive_ui(_bot, _user_id, _wid, _thread_id)
+                if handled:
+                    # Update user's read offset
+                    session = await session_manager.resolve_session_for_window(_wid)
+                    if session and session.file_path:
+                        try:
+                            file_size = Path(session.file_path).stat().st_size
+                            session_manager.update_user_window_offset(
+                                _user_id, _wid, file_size
+                            )
+                        except OSError:
+                            pass
+                else:
+                    # UI not rendered — clear the early-set mode
+                    clear_interactive_mode(_user_id, _thread_id)
+
+            enqueue_callable(bot, user_id, _send_interactive_ui())
+            continue  # Don't send the normal tool_use message
 
         # Any non-interactive message means the interaction is complete — delete the UI message
         if get_interactive_msg_id(user_id, thread_id):

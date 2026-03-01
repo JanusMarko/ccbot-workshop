@@ -20,8 +20,9 @@ Key components:
 import asyncio
 import logging
 import time
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 from telegram import Bot
 from telegram.constants import ChatAction
@@ -55,7 +56,7 @@ MERGE_MAX_LENGTH = 3800  # Leave room for markdown conversion overhead
 class MessageTask:
     """Message task for queue processing."""
 
-    task_type: Literal["content", "status_update", "status_clear"]
+    task_type: Literal["content", "status_update", "status_clear", "callable"]
     text: str | None = None
     window_id: str | None = None
     # content type fields
@@ -64,6 +65,8 @@ class MessageTask:
     content_type: str = "text"
     thread_id: int | None = None  # Telegram topic thread_id for targeted send
     image_data: list[tuple[str, bytes]] | None = None  # From tool_result images
+    # callable task: a no-argument coroutine executed in-order by the worker
+    callable_fn: Coroutine[Any, Any, None] | None = None
 
 
 # Per-user message queues and worker tasks
@@ -144,10 +147,11 @@ async def _merge_content_tasks(
     additional tasks merged (0 if no merging occurred).
 
     Note on queue counter management:
-        When we put items back, we call task_done() to compensate for the
-        internal counter increment caused by put_nowait(). This is necessary
-        because the items were already counted when originally enqueued.
-        Without this compensation, queue.join() would wait indefinitely.
+        put_nowait() unconditionally increments _unfinished_tasks.
+        When we put items back, they already hold a counter slot from when
+        they were first enqueued, so the compensating task_done() removes the
+        duplicate increment added by put_nowait(). Without this, _unfinished_tasks
+        would leak by len(remaining) per merge cycle.
     """
     merged_parts = list(first.parts)
     current_length = sum(len(p) for p in merged_parts)
@@ -212,10 +216,10 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
                 if flood_end > 0:
                     remaining = flood_end - time.monotonic()
                     if remaining > 0:
-                        if task.task_type != "content":
+                        if task.task_type in ("status_update", "status_clear"):
                             # Status is ephemeral — safe to drop
                             continue
-                        # Content is actual Claude output — wait then send
+                        # Content and callable tasks must not be dropped — wait
                         logger.debug(
                             "Flood controlled: waiting %.0fs for content (user %d)",
                             remaining,
@@ -241,6 +245,9 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
                     await _process_status_update_task(bot, user_id, task)
                 elif task.task_type == "status_clear":
                     await _do_clear_status_message(bot, user_id, task.thread_id or 0)
+                elif task.task_type == "callable":
+                    if task.callable_fn is not None:
+                        await task.callable_fn
             except RetryAfter as e:
                 retry_secs = (
                     e.retry_after
@@ -658,6 +665,22 @@ async def enqueue_status_update(
     else:
         task = MessageTask(task_type="status_clear", thread_id=thread_id)
 
+    queue.put_nowait(task)
+
+
+def enqueue_callable(
+    bot: Bot,
+    user_id: int,
+    coro: Coroutine[Any, Any, None],
+) -> None:
+    """Enqueue an arbitrary coroutine for in-order execution by the queue worker.
+
+    The coroutine is awaited by the worker after all previously-enqueued tasks
+    have been processed, guaranteeing ordering without blocking the caller.
+    The coroutine must accept no arguments (use functools.partial or a closure).
+    """
+    queue = get_or_create_queue(bot, user_id)
+    task = MessageTask(task_type="callable", callable_fn=coro)
     queue.put_nowait(task)
 
 
