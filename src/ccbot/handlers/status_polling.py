@@ -5,9 +5,9 @@ Provides background polling of terminal status lines for all active users:
   - Detects interactive UIs (permission prompts) not triggered via JSONL
   - Updates status messages in Telegram
   - Polls thread_bindings (each topic = one window)
-  - Periodically probes topic existence via unpin_all_forum_topic_messages
-    (silent no-op when no pins); cleans up deleted topics (kills tmux window
-    + unbinds thread)
+  - Periodically probes topic existence via send_chat_action (TYPING);
+    raises BadRequest on deleted topics; cleans up deleted topics (kills
+    tmux window + unbinds thread)
 
 Key components:
   - STATUS_POLL_INTERVAL: Polling frequency (1 second)
@@ -21,6 +21,7 @@ import logging
 import time
 
 from telegram import Bot
+from telegram.constants import ChatAction
 from telegram.error import BadRequest
 
 from ..session import session_manager
@@ -141,9 +142,10 @@ async def status_poll_loop(bot: Bot) -> None:
                 last_topic_check = now
                 for user_id, thread_id, wid in session_manager.all_thread_bindings():
                     try:
-                        await bot.unpin_all_forum_topic_messages(
+                        await bot.send_chat_action(
                             chat_id=session_manager.resolve_chat_id(user_id, thread_id),
                             message_thread_id=thread_id,
+                            action=ChatAction.TYPING,
                         )
                     except BadRequest as e:
                         if "Topic_id_invalid" in str(e):
