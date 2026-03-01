@@ -1569,7 +1569,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                     # UI not rendered — clear the early-set mode
                     clear_interactive_mode(_user_id, _thread_id)
 
-            enqueue_callable(bot, user_id, _send_interactive_ui())
+            enqueue_callable(bot, user_id, _send_interactive_ui)
             continue  # Don't send the normal tool_use message
 
         # Any non-interactive message means the interaction is complete — delete the UI message

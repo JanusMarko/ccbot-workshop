@@ -20,7 +20,7 @@ Key components:
 import asyncio
 import logging
 import time
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -65,8 +65,13 @@ class MessageTask:
     content_type: str = "text"
     thread_id: int | None = None  # Telegram topic thread_id for targeted send
     image_data: list[tuple[str, bytes]] | None = None  # From tool_result images
-    # callable task: a no-argument coroutine executed in-order by the worker
-    callable_fn: Coroutine[Any, Any, None] | None = None
+    # callable task: a zero-argument coroutine factory executed in-order by the
+    # worker.  Must be a factory (not a bare coroutine object) so the worker can
+    # safely retry by calling it again — a coroutine can only be awaited once.
+    callable_fn: Callable[[], Coroutine[Any, Any, None]] | None = None
+    # Number of times this task has been re-queued after a long RetryAfter.
+    # Prevents infinite re-queue loops under persistent rate limiting.
+    requeue_count: int = 0
 
 
 # Per-user message queues and worker tasks
@@ -86,6 +91,12 @@ _flood_until: dict[int, float] = {}
 
 # Max seconds to wait for flood control before dropping tasks
 FLOOD_CONTROL_MAX_WAIT = 10
+
+# Maximum number of RetryAfter retries per task before giving up
+MAX_TASK_RETRIES = 3
+
+# Maximum number of times a task can be re-queued after long RetryAfter
+MAX_REQUEUE_COUNT = 5
 
 
 def get_message_queue(user_id: int) -> asyncio.Queue[MessageTask] | None:
@@ -230,45 +241,87 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
                     _flood_until.pop(user_id, None)
                     logger.info("Flood control lifted for user %d", user_id)
 
+                # Retry loop: retry the task on RetryAfter up to MAX_TASK_RETRIES times.
+                # Merging is done once before the loop so that merged_task is reused on
+                # every retry attempt rather than re-merging from a now-empty queue.
                 if task.task_type == "content":
-                    # Try to merge consecutive content tasks
                     merged_task, merge_count = await _merge_content_tasks(
                         queue, task, lock
                     )
                     if merge_count > 0:
                         logger.debug(f"Merged {merge_count} tasks for user {user_id}")
-                        # Mark merged tasks as done
                         for _ in range(merge_count):
                             queue.task_done()
-                    await _process_content_task(bot, user_id, merged_task)
-                elif task.task_type == "status_update":
-                    await _process_status_update_task(bot, user_id, task)
-                elif task.task_type == "status_clear":
-                    await _do_clear_status_message(bot, user_id, task.thread_id or 0)
-                elif task.task_type == "callable":
-                    if task.callable_fn is not None:
-                        await task.callable_fn
-            except RetryAfter as e:
-                retry_secs = (
-                    e.retry_after
-                    if isinstance(e.retry_after, int)
-                    else int(e.retry_after.total_seconds())
-                )
-                if retry_secs > FLOOD_CONTROL_MAX_WAIT:
-                    _flood_until[user_id] = time.monotonic() + retry_secs
-                    logger.warning(
-                        "Flood control for user %d: retry_after=%ds, "
-                        "pausing queue until ban expires",
-                        user_id,
-                        retry_secs,
-                    )
                 else:
-                    logger.warning(
-                        "Flood control for user %d: waiting %ds",
-                        user_id,
-                        retry_secs,
-                    )
-                    await asyncio.sleep(retry_secs)
+                    merged_task = task
+                    merge_count = 0
+
+                for attempt in range(MAX_TASK_RETRIES + 1):
+                    try:
+                        if merged_task.task_type == "content":
+                            await _process_content_task(bot, user_id, merged_task)
+                        elif merged_task.task_type == "status_update":
+                            await _process_status_update_task(bot, user_id, merged_task)
+                        elif merged_task.task_type == "status_clear":
+                            await _do_clear_status_message(
+                                bot, user_id, merged_task.thread_id or 0
+                            )
+                        elif merged_task.task_type == "callable":
+                            if merged_task.callable_fn is not None:
+                                await merged_task.callable_fn()
+                        break  # Success — exit retry loop
+                    except RetryAfter as e:
+                        retry_secs = (
+                            e.retry_after
+                            if isinstance(e.retry_after, int)
+                            else int(e.retry_after.total_seconds())
+                        )
+                        if retry_secs > FLOOD_CONTROL_MAX_WAIT:
+                            _flood_until[user_id] = time.monotonic() + retry_secs
+                            if merged_task.requeue_count >= MAX_REQUEUE_COUNT:
+                                logger.error(
+                                    "Dropping task for user %d after %d re-queues "
+                                    "(persistent flood control, task_type=%s)",
+                                    user_id,
+                                    merged_task.requeue_count,
+                                    merged_task.task_type,
+                                )
+                                break
+                            merged_task.requeue_count += 1
+                            logger.warning(
+                                "Flood control for user %d: retry_after=%ds, "
+                                "re-queuing task (requeue %d/%d)",
+                                user_id,
+                                retry_secs,
+                                merged_task.requeue_count,
+                                MAX_REQUEUE_COUNT,
+                            )
+                            # Re-queue so the task is retried once the ban
+                            # expires.  put_nowait increments _unfinished_tasks
+                            # for the new slot; the outer finally calls
+                            # task_done() for the slot consumed by dequeuing,
+                            # so the net counter change is zero.
+                            queue.put_nowait(merged_task)
+                            break  # Let the flood-control path handle re-queued task
+                        if attempt < MAX_TASK_RETRIES:
+                            logger.warning(
+                                "RetryAfter for user %d: waiting %ds (attempt %d/%d)",
+                                user_id,
+                                retry_secs,
+                                attempt + 1,
+                                MAX_TASK_RETRIES,
+                            )
+                            await asyncio.sleep(retry_secs)
+                            # Loop back and retry the same task
+                        else:
+                            logger.error(
+                                "Dropping task for user %d after %d retries "
+                                "(last retry_after=%ds, task_type=%s)",
+                                user_id,
+                                MAX_TASK_RETRIES,
+                                retry_secs,
+                                merged_task.task_type,
+                            )
             except Exception as e:
                 logger.error(f"Error processing message task for user {user_id}: {e}")
             finally:
@@ -388,8 +441,14 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     # 4. Send images if present (from tool_result with base64 image blocks)
     await _send_task_images(bot, chat_id, task)
 
-    # 5. After content, check and send status
-    await _check_and_send_status(bot, user_id, wid, task.thread_id)
+    # 5. After content, check and send status.
+    # Catch RetryAfter here: the status message is cosmetic and must never
+    # propagate RetryAfter to the outer retry loop (which would re-send all
+    # content messages as duplicates).
+    try:
+        await _check_and_send_status(bot, user_id, wid, task.thread_id)
+    except RetryAfter:
+        pass
 
 
 async def _convert_status_to_content(
@@ -671,16 +730,22 @@ async def enqueue_status_update(
 def enqueue_callable(
     bot: Bot,
     user_id: int,
-    coro: Coroutine[Any, Any, None],
+    coro_factory: Callable[[], Coroutine[Any, Any, None]],
 ) -> None:
-    """Enqueue an arbitrary coroutine for in-order execution by the queue worker.
+    """Enqueue a coroutine factory for in-order execution by the queue worker.
 
-    The coroutine is awaited by the worker after all previously-enqueued tasks
-    have been processed, guaranteeing ordering without blocking the caller.
-    The coroutine must accept no arguments (use functools.partial or a closure).
+    *coro_factory* is a zero-argument callable that returns a new coroutine each
+    time it is called. The worker calls the factory on each attempt so that
+    retries after ``RetryAfter`` work correctly (a bare coroutine object can
+    only be awaited once).
+
+    Typically this is just an async function reference (not its invocation)::
+
+        enqueue_callable(bot, uid, my_async_fn)   # correct — factory
+        enqueue_callable(bot, uid, my_async_fn())  # WRONG — bare coroutine
     """
     queue = get_or_create_queue(bot, user_id)
-    task = MessageTask(task_type="callable", callable_fn=coro)
+    task = MessageTask(task_type="callable", callable_fn=coro_factory)
     queue.put_nowait(task)
 
 
