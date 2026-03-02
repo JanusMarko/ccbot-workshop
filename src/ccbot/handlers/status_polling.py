@@ -175,6 +175,8 @@ async def status_poll_loop(bot: Bot) -> None:
                             e,
                         )
 
+            # Fresh snapshot — reflects any unbinds from the topic probe above,
+            # so bindings cleaned there are naturally excluded.
             for user_id, thread_id, wid in session_manager.all_thread_bindings():
                 try:
                     # Clean up stale bindings (window no longer exists)
