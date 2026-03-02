@@ -5,9 +5,9 @@ Provides background polling of terminal status lines for all active users:
   - Detects interactive UIs (permission prompts) not triggered via JSONL
   - Updates status messages in Telegram
   - Polls thread_bindings (each topic = one window)
-  - Periodically probes topic existence via unpin_all_forum_topic_messages
-    (silent no-op when no pins); cleans up deleted topics (kills tmux window
-    + unbinds thread)
+  - Periodically probes topic existence via send_chat_action (TYPING);
+    raises BadRequest on deleted topics; cleans up deleted topics (kills
+    tmux window + unbinds thread)
 
 Key components:
   - STATUS_POLL_INTERVAL: Polling frequency (1 second)
@@ -21,6 +21,7 @@ import logging
 import time
 
 from telegram import Bot
+from telegram.constants import ChatAction
 from telegram.error import BadRequest
 
 from ..session import session_manager
@@ -28,6 +29,7 @@ from ..terminal_parser import is_interactive_ui, parse_status_line
 from ..tmux_manager import tmux_manager
 from .interactive_ui import (
     clear_interactive_msg,
+    get_interactive_msg_id,
     get_interactive_window,
     handle_interactive_ui,
 )
@@ -93,6 +95,15 @@ async def update_status_message(
     # Check for permission prompt (interactive UI not triggered via JSONL)
     # ALWAYS check UI, regardless of skip_status
     if should_check_new_ui and is_interactive_ui(pane_text):
+        # Skip if another path (e.g. JSONL monitor) already sent an interactive
+        # message for this user/thread — avoids duplicate messages
+        if get_interactive_msg_id(user_id, thread_id):
+            logger.debug(
+                "Interactive UI already tracked for user=%d thread=%s, skipping",
+                user_id,
+                thread_id,
+            )
+            return
         logger.debug(
             "Interactive UI detected in polling (user=%d, window=%s, thread=%s)",
             user_id,
@@ -129,13 +140,12 @@ async def status_poll_loop(bot: Bot) -> None:
             now = time.monotonic()
             if now - last_topic_check >= TOPIC_CHECK_INTERVAL:
                 last_topic_check = now
-                for user_id, thread_id, wid in list(
-                    session_manager.iter_thread_bindings()
-                ):
+                for user_id, thread_id, wid in session_manager.all_thread_bindings():
                     try:
-                        await bot.unpin_all_forum_topic_messages(
+                        await bot.send_chat_action(
                             chat_id=session_manager.resolve_chat_id(user_id, thread_id),
                             message_thread_id=thread_id,
+                            action=ChatAction.TYPING,
                         )
                     except BadRequest as e:
                         if "Topic_id_invalid" in str(e):
@@ -165,7 +175,9 @@ async def status_poll_loop(bot: Bot) -> None:
                             e,
                         )
 
-            for user_id, thread_id, wid in list(session_manager.iter_thread_bindings()):
+            # Fresh snapshot — reflects any unbinds from the topic probe above,
+            # so bindings cleaned there are naturally excluded.
+            for user_id, thread_id, wid in session_manager.all_thread_bindings():
                 try:
                     # Clean up stale bindings (window no longer exists)
                     w = await tmux_manager.find_window_by_id(wid)

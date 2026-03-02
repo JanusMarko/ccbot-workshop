@@ -15,8 +15,10 @@ State dicts are keyed by (user_id, thread_id_or_0) for Telegram topic support.
 """
 
 import logging
+import time
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest, RetryAfter
 
 from ..session import session_manager
 from ..terminal_parser import extract_interactive_content, is_interactive_ui
@@ -45,6 +47,21 @@ _interactive_msgs: dict[tuple[int, int], int] = {}
 # Track interactive mode: (user_id, thread_id_or_0) -> window_id
 _interactive_mode: dict[tuple[int, int], str] = {}
 
+# Deduplication: monotonic timestamp of last new interactive message send
+_last_interactive_send: dict[tuple[int, int], float] = {}
+_INTERACTIVE_DEDUP_WINDOW = 2.0  # seconds — suppress duplicate sends within this window
+
+# Generation counter: incremented on every state transition (set/clear) so that
+# stale callables enqueued by the JSONL monitor can detect invalidation.
+_interactive_generation: dict[tuple[int, int], int] = {}
+
+
+def _next_generation(ikey: tuple[int, int]) -> int:
+    """Increment and return the generation counter for this user/thread."""
+    gen = _interactive_generation.get(ikey, 0) + 1
+    _interactive_generation[ikey] = gen
+    return gen
+
 
 def get_interactive_window(user_id: int, thread_id: int | None = None) -> str | None:
     """Get the window_id for user's interactive mode."""
@@ -55,21 +72,25 @@ def set_interactive_mode(
     user_id: int,
     window_id: str,
     thread_id: int | None = None,
-) -> None:
-    """Set interactive mode for a user."""
+) -> int:
+    """Set interactive mode for a user. Returns the generation counter."""
+    ikey = (user_id, thread_id or 0)
     logger.debug(
         "Set interactive mode: user=%d, window_id=%s, thread=%s",
         user_id,
         window_id,
         thread_id,
     )
-    _interactive_mode[(user_id, thread_id or 0)] = window_id
+    _interactive_mode[ikey] = window_id
+    return _next_generation(ikey)
 
 
 def clear_interactive_mode(user_id: int, thread_id: int | None = None) -> None:
     """Clear interactive mode for a user (without deleting message)."""
+    ikey = (user_id, thread_id or 0)
     logger.debug("Clear interactive mode: user=%d, thread=%s", user_id, thread_id)
-    _interactive_mode.pop((user_id, thread_id or 0), None)
+    _interactive_mode.pop(ikey, None)
+    _next_generation(ikey)
 
 
 def get_interactive_msg_id(user_id: int, thread_id: int | None = None) -> int | None:
@@ -145,14 +166,36 @@ async def handle_interactive_ui(
     user_id: int,
     window_id: str,
     thread_id: int | None = None,
+    expected_generation: int | None = None,
 ) -> bool:
     """Capture terminal and send interactive UI content to user.
 
     Handles AskUserQuestion, ExitPlanMode, Permission Prompt, and
     RestoreCheckpoint UIs. Returns True if UI was detected and sent,
     False otherwise.
+
+    If *expected_generation* is provided (from the JSONL monitor path),
+    the function checks that the current generation still matches before
+    proceeding.  This prevents stale callables from acting after the
+    interactive mode has been cleared or superseded.
     """
     ikey = (user_id, thread_id or 0)
+
+    # Generation guard: if caller provided an expected generation and it
+    # doesn't match the current one, this callable is stale — bail out.
+    if expected_generation is not None:
+        current_gen = _interactive_generation.get(ikey, 0)
+        if current_gen != expected_generation:
+            logger.debug(
+                "Stale interactive UI callable: user=%d, thread=%s, "
+                "expected_gen=%d, current_gen=%d — skipping",
+                user_id,
+                thread_id,
+                expected_generation,
+                current_gen,
+            )
+            return False
+
     chat_id = session_manager.resolve_chat_id(user_id, thread_id)
     w = await tmux_manager.find_window_by_id(window_id)
     if not w:
@@ -202,13 +245,53 @@ async def handle_interactive_ui(
             )
             _interactive_mode[ikey] = window_id
             return True
-        except Exception:
-            # Edit failed (message deleted, etc.) - clear stale msg_id and send new
+        except RetryAfter:
+            raise
+        except BadRequest as e:
+            if "is not modified" in str(e).lower():
+                # Content identical to what's already displayed — treat as success.
+                _interactive_mode[ikey] = window_id
+                return True
+            # Any other BadRequest (e.g. message deleted, too old to edit):
+            # clear stale state and try to remove the orphan message.
             logger.debug(
-                "Edit failed for interactive msg %s, sending new", existing_msg_id
+                "Edit failed for interactive msg %s (%s), sending new",
+                existing_msg_id,
+                e,
+            )
+            _interactive_msgs.pop(ikey, None)
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=existing_msg_id)
+            except Exception:
+                pass  # Already deleted or too old — ignore.
+            # Fall through to send new message
+        except Exception as e:
+            # NetworkError, TimedOut, Forbidden, etc. — message state is uncertain;
+            # discard the stale ID and fall through to send a fresh message.
+            logger.debug(
+                "Edit failed (%s) for interactive msg %s, sending new",
+                e,
+                existing_msg_id,
             )
             _interactive_msgs.pop(ikey, None)
             # Fall through to send new message
+
+    # Dedup guard: prevent both JSONL monitor and status poller from sending
+    # a new interactive message in the same short window.  No await between
+    # check and set, so this is atomic in the asyncio event loop.
+    last_send = _last_interactive_send.get(ikey, 0.0)
+    now = time.monotonic()
+    if now - last_send < _INTERACTIVE_DEDUP_WINDOW:
+        logger.debug(
+            "Dedup: skipping duplicate interactive UI send "
+            "(user=%d, thread=%s, %.1fs since last)",
+            user_id,
+            thread_id,
+            now - last_send,
+        )
+        _interactive_mode[ikey] = window_id
+        return True
+    _last_interactive_send[ikey] = now
 
     # Send new message (plain text — terminal content is not markdown)
     logger.info(
@@ -222,7 +305,11 @@ async def handle_interactive_ui(
             link_preview_options=NO_LINK_PREVIEW,
             **thread_kwargs,  # type: ignore[arg-type]
         )
+    except RetryAfter:
+        _last_interactive_send.pop(ikey, None)
+        raise
     except Exception as e:
+        _last_interactive_send.pop(ikey, None)
         logger.error("Failed to send interactive UI: %s", e)
         return False
     if sent:
@@ -241,6 +328,8 @@ async def clear_interactive_msg(
     ikey = (user_id, thread_id or 0)
     msg_id = _interactive_msgs.pop(ikey, None)
     _interactive_mode.pop(ikey, None)
+    _last_interactive_send.pop(ikey, None)
+    _next_generation(ikey)
     logger.debug(
         "Clear interactive msg: user=%d, thread=%s, msg_id=%s",
         user_id,

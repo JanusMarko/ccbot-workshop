@@ -30,7 +30,7 @@
 │  SessionMonitor         │    │  TmuxManager (tmux_manager.py)  │
 │  (session_monitor.py)   │    │  - list/find/create/kill windows│
 │  - Poll JSONL every 2s  │    │  - send_keys to pane            │
-│  - Detect mtime changes │    │  - capture_pane for screenshot  │
+│  - Detect size changes  │    │  - capture_pane for screenshot  │
 │  - Parse new lines      │    └──────────────┬─────────────────┘
 │  - Track pending tools  │                   │
 │    across poll cycles   │                   │

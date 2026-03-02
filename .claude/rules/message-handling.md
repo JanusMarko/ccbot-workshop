@@ -32,7 +32,7 @@ Per-user message queues + worker pattern for all send tasks:
 
 ## Performance Optimizations
 
-**mtime cache**: The monitoring loop maintains an in-memory file mtime cache, skipping reads for unchanged files.
+**File size fast path**: The monitoring loop compares file size against the last byte offset, skipping reads for unchanged files.
 
 **Byte offset incremental reads**: Each tracked session records `last_byte_offset`, reading only new content. File truncation (offset > file_size) is detected and offset is auto-reset.
 

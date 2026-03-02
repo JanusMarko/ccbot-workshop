@@ -6,7 +6,7 @@ Runs an async polling loop that:
   3. Reads new JSONL lines from each session file using byte-offset tracking.
   4. Parses entries via TranscriptParser and emits NewMessage objects to a callback.
 
-Optimizations: mtime cache skips unchanged files; byte offset avoids re-reading.
+Optimizations: file size check skips unchanged files; byte offset avoids re-reading.
 
 Key classes: SessionMonitor, NewMessage, SessionInfo.
 """
@@ -82,8 +82,6 @@ class SessionMonitor:
         # Track last known session_map for detecting changes
         # Keys may be window_id (@12) or window_name (old format) during transition
         self._last_session_map: dict[str, str] = {}  # window_key -> session_id
-        # In-memory mtime cache for quick file change detection (not persisted)
-        self._file_mtimes: dict[str, float] = {}  # session_id -> last_seen_mtime
 
     def set_message_callback(
         self, callback: Callable[[NewMessage], Awaitable[None]]
@@ -291,43 +289,34 @@ class SessionMonitor:
                     # For new sessions, initialize offset to end of file
                     # to avoid re-processing old messages
                     try:
-                        st = session_info.file_path.stat()
-                        file_size = st.st_size
-                        current_mtime = st.st_mtime
+                        file_size = session_info.file_path.stat().st_size
                     except OSError:
                         file_size = 0
-                        current_mtime = 0.0
                     tracked = TrackedSession(
                         session_id=session_info.session_id,
                         file_path=str(session_info.file_path),
                         last_byte_offset=file_size,
                     )
                     self.state.update_session(tracked)
-                    self._file_mtimes[session_info.session_id] = current_mtime
                     logger.info(f"Started tracking session: {session_info.session_id}")
                     continue
 
-                # Check mtime + file size to see if file has changed
+                # Quick size check: skip reading if file size hasn't changed.
+                # For append-only JSONL files, size == offset means no new
+                # content.  Size < offset (truncation) and size > offset (new
+                # data) both need processing — handled inside _read_new_lines.
                 try:
-                    st = session_info.file_path.stat()
-                    current_mtime = st.st_mtime
-                    current_size = st.st_size
+                    current_size = session_info.file_path.stat().st_size
                 except OSError:
                     continue
 
-                last_mtime = self._file_mtimes.get(session_info.session_id, 0.0)
-                if (
-                    current_mtime <= last_mtime
-                    and current_size <= tracked.last_byte_offset
-                ):
-                    # File hasn't changed, skip reading
+                if current_size == tracked.last_byte_offset:
                     continue
 
                 # File changed, read new content from last offset
                 new_entries = await self._read_new_lines(
                     tracked, session_info.file_path
                 )
-                self._file_mtimes[session_info.session_id] = current_mtime
 
                 if new_entries:
                     logger.debug(
@@ -370,7 +359,10 @@ class SessionMonitor:
             except OSError as e:
                 logger.debug(f"Error processing session {session_info.session_id}: {e}")
 
-        self.state.save_if_dirty()
+        # NOTE: save_if_dirty() is intentionally NOT called here.
+        # Offsets must be persisted only AFTER delivery to Telegram (in
+        # _monitor_loop) to guarantee at-least-once delivery.  Saving before
+        # delivery would risk silent message loss on crash.
         return new_messages
 
     async def _load_current_session_map(self) -> dict[str, str]:
@@ -417,7 +409,7 @@ class SessionMonitor:
             )
             for session_id in stale_sessions:
                 self.state.remove_session(session_id)
-                self._file_mtimes.pop(session_id, None)
+                self._pending_tools.pop(session_id, None)
             self.state.save_if_dirty()
 
     async def _detect_and_cleanup_changes(self) -> dict[str, str]:
@@ -459,7 +451,7 @@ class SessionMonitor:
         if sessions_to_remove:
             for session_id in sessions_to_remove:
                 self.state.remove_session(session_id)
-                self._file_mtimes.pop(session_id, None)
+                self._pending_tools.pop(session_id, None)
             self.state.save_if_dirty()
 
         # Update last known map
@@ -503,6 +495,12 @@ class SessionMonitor:
                             await self._message_callback(msg)
                         except Exception as e:
                             logger.error(f"Message callback error: {e}")
+
+                # Persist byte offsets AFTER delivering messages to Telegram.
+                # This guarantees at-least-once delivery: if the bot crashes
+                # before this save, messages will be re-read and re-delivered
+                # on restart (safe duplicate) rather than silently lost.
+                self.state.save_if_dirty()
 
             except Exception as e:
                 logger.error(f"Monitor loop error: {e}")
