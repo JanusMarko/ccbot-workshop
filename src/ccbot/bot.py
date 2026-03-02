@@ -41,7 +41,7 @@ from telegram import (
     BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    InputMediaDocument,
+    InputMediaPhoto,
     Update,
 )
 from telegram.constants import ChatAction
@@ -229,9 +229,8 @@ async def screenshot_command(
 
     png_bytes = await text_to_image(text, with_ansi=True)
     keyboard = _build_screenshot_keyboard(wid)
-    await update.message.reply_document(
-        document=io.BytesIO(png_bytes),
-        filename="screenshot.png",
+    await update.message.reply_photo(
+        photo=io.BytesIO(png_bytes),
         reply_markup=keyboard,
     )
 
@@ -1360,8 +1359,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         keyboard = _build_screenshot_keyboard(window_id)
         try:
             await query.edit_message_media(
-                media=InputMediaDocument(
-                    media=io.BytesIO(png_bytes), filename="screenshot.png"
+                media=InputMediaPhoto(
+                    media=io.BytesIO(png_bytes),
                 ),
                 reply_markup=keyboard,
             )
@@ -1513,14 +1512,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             keyboard = _build_screenshot_keyboard(window_id)
             try:
                 await query.edit_message_media(
-                    media=InputMediaDocument(
+                    media=InputMediaPhoto(
                         media=io.BytesIO(png_bytes),
-                        filename="screenshot.png",
                     ),
                     reply_markup=keyboard,
                 )
-            except Exception:
-                pass  # Screenshot unchanged or message too old
+            except Exception as e:
+                logger.debug(f"Screenshot edit after key press failed: {e}")
 
 
 # --- Streaming response / notifications ---
