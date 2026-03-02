@@ -1142,7 +1142,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 user.id,
                 pending_thread_id,
             )
-            # Wait for Claude Code's SessionStart hook to register in session_map
+            # Wait for Claude Code's SessionStart hook to register in session_map.
+            # Return value intentionally ignored: on timeout, the monitor's poll
+            # cycle will pick up the session_map entry once the hook fires.
             await session_manager.wait_for_session_map_entry(created_wid)
 
             if pending_thread_id is not None:
