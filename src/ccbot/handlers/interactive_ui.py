@@ -18,6 +18,7 @@ import logging
 import time
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest, RetryAfter
 
 from ..session import session_manager
 from ..terminal_parser import extract_interactive_content, is_interactive_ui
@@ -207,10 +208,33 @@ async def handle_interactive_ui(
             )
             _interactive_mode[ikey] = window_id
             return True
-        except Exception:
-            # Edit failed (message deleted, etc.) - clear stale msg_id and send new
+        except RetryAfter:
+            raise
+        except BadRequest as e:
+            if "is not modified" in str(e).lower():
+                # Content identical to what's already displayed — treat as success.
+                _interactive_mode[ikey] = window_id
+                return True
+            # Any other BadRequest (e.g. message deleted, too old to edit):
+            # clear stale state and try to remove the orphan message.
             logger.debug(
-                "Edit failed for interactive msg %s, sending new", existing_msg_id
+                "Edit failed for interactive msg %s (%s), sending new",
+                existing_msg_id,
+                e,
+            )
+            _interactive_msgs.pop(ikey, None)
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=existing_msg_id)
+            except Exception:
+                pass  # Already deleted or too old — ignore.
+            # Fall through to send new message
+        except Exception as e:
+            # NetworkError, TimedOut, Forbidden, etc. — message state is uncertain;
+            # discard the stale ID and fall through to send a fresh message.
+            logger.debug(
+                "Edit failed (%s) for interactive msg %s, sending new",
+                e,
+                existing_msg_id,
             )
             _interactive_msgs.pop(ikey, None)
             # Fall through to send new message
@@ -244,6 +268,9 @@ async def handle_interactive_ui(
             link_preview_options=NO_LINK_PREVIEW,
             **thread_kwargs,  # type: ignore[arg-type]
         )
+    except RetryAfter:
+        _last_interactive_send.pop(ikey, None)
+        raise
     except Exception as e:
         _last_interactive_send.pop(ikey, None)
         logger.error("Failed to send interactive UI: %s", e)
