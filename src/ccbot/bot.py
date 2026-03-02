@@ -1546,8 +1546,9 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
     for user_id, wid, thread_id in active_users:
         # Handle interactive tools specially - capture terminal and send UI
         if msg.tool_name in INTERACTIVE_TOOL_NAMES and msg.content_type == "tool_use":
-            # Mark interactive mode BEFORE enqueuing so polling skips this window
-            set_interactive_mode(user_id, wid, thread_id)
+            # Mark interactive mode BEFORE enqueuing so polling skips this window.
+            # Capture the generation so the callable can detect staleness.
+            gen = set_interactive_mode(user_id, wid, thread_id)
 
             # Enqueue the interactive UI handling as a callable task so it
             # executes AFTER all pending content messages already in the queue,
@@ -1557,10 +1558,13 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 _user_id: int = user_id,
                 _wid: str = wid,
                 _thread_id: int | None = thread_id,
+                _gen: int = gen,
             ) -> None:
                 # Wait briefly for Claude Code to render the question UI
                 await asyncio.sleep(0.3)
-                handled = await handle_interactive_ui(_bot, _user_id, _wid, _thread_id)
+                handled = await handle_interactive_ui(
+                    _bot, _user_id, _wid, _thread_id, expected_generation=_gen
+                )
                 if handled:
                     # Update user's read offset
                     session = await session_manager.resolve_session_for_window(_wid)
