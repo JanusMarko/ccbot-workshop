@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +24,22 @@ import libtmux
 from .config import SENSITIVE_ENV_VARS, config
 
 logger = logging.getLogger(__name__)
+
+# Process names that indicate a bare shell (Claude Code has exited).
+# Used to prevent sending user input to a shell prompt.
+SHELL_COMMANDS = frozenset(
+    {
+        "bash",
+        "zsh",
+        "sh",
+        "fish",
+        "dash",
+        "tcsh",
+        "csh",
+        "ksh",
+        "ash",
+    }
+)
 
 
 @dataclass
@@ -38,6 +55,9 @@ class TmuxWindow:
 class TmuxManager:
     """Manages tmux windows for Claude Code sessions."""
 
+    # How long cached list_windows results are valid (seconds).
+    _CACHE_TTL = 1.0
+
     def __init__(self, session_name: str | None = None):
         """Initialize tmux manager.
 
@@ -46,6 +66,8 @@ class TmuxManager:
         """
         self.session_name = session_name or config.tmux_session_name
         self._server: libtmux.Server | None = None
+        self._windows_cache: list[TmuxWindow] | None = None
+        self._windows_cache_time: float = 0.0
 
     @property
     def server(self) -> libtmux.Server:
@@ -92,12 +114,23 @@ class TmuxManager:
             except Exception:
                 pass  # var not set in session env — nothing to remove
 
+    def invalidate_cache(self) -> None:
+        """Invalidate the cached window list (call after mutations)."""
+        self._windows_cache = None
+
     async def list_windows(self) -> list[TmuxWindow]:
         """List all windows in the session with their working directories.
 
-        Returns:
-            List of TmuxWindow with window info and cwd
+        Results are cached for ``_CACHE_TTL`` seconds to avoid hammering
+        the tmux server when multiple callers need window info in the same
+        poll cycle.
         """
+        now = time.monotonic()
+        if (
+            self._windows_cache is not None
+            and (now - self._windows_cache_time) < self._CACHE_TTL
+        ):
+            return self._windows_cache
 
         def _sync_list_windows() -> list[TmuxWindow]:
             windows = []
@@ -135,7 +168,10 @@ class TmuxManager:
 
             return windows
 
-        return await asyncio.to_thread(_sync_list_windows)
+        result = await asyncio.to_thread(_sync_list_windows)
+        self._windows_cache = result
+        self._windows_cache_time = time.monotonic()
+        return result
 
     async def find_window_by_name(self, window_name: str) -> TmuxWindow | None:
         """Find a window by its name.
@@ -172,56 +208,29 @@ class TmuxManager:
     async def capture_pane(self, window_id: str, with_ansi: bool = False) -> str | None:
         """Capture the visible text content of a window's active pane.
 
-        Args:
-            window_id: The window ID to capture
-            with_ansi: If True, capture with ANSI color codes
-
-        Returns:
-            The captured text, or None on failure.
+        Uses a direct ``tmux capture-pane`` subprocess for both plain text
+        and ANSI modes — avoids the multiple tmux round-trips that libtmux
+        would generate (list-windows → list-panes → capture-pane).
         """
+        cmd = ["tmux", "capture-pane", "-p", "-t", window_id]
         if with_ansi:
-            # Use async subprocess to call tmux capture-pane -e for ANSI colors
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "tmux",
-                    "capture-pane",
-                    "-e",
-                    "-p",
-                    "-t",
-                    window_id,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                stdout, stderr = await proc.communicate()
-                if proc.returncode == 0:
-                    return stdout.decode("utf-8")
-                logger.error(
-                    f"Failed to capture pane {window_id}: {stderr.decode('utf-8')}"
-                )
-                return None
-            except Exception as e:
-                logger.error(f"Unexpected error capturing pane {window_id}: {e}")
-                return None
-
-        # Original implementation for plain text - wrap in thread
-        def _sync_capture() -> str | None:
-            session = self.get_session()
-            if not session:
-                return None
-            try:
-                window = session.windows.get(window_id=window_id)
-                if not window:
-                    return None
-                pane = window.active_pane
-                if not pane:
-                    return None
-                lines = pane.capture_pane()
-                return "\n".join(lines) if isinstance(lines, list) else str(lines)
-            except Exception as e:
-                logger.error(f"Failed to capture pane {window_id}: {e}")
-                return None
-
-        return await asyncio.to_thread(_sync_capture)
+            cmd.insert(2, "-e")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            if proc.returncode == 0:
+                return stdout.decode("utf-8")
+            logger.error(
+                "Failed to capture pane %s: %s", window_id, stderr.decode("utf-8")
+            )
+            return None
+        except Exception as e:
+            logger.error("Unexpected error capturing pane %s: %s", window_id, e)
+            return None
 
     async def send_keys(
         self, window_id: str, text: str, enter: bool = True, literal: bool = True
@@ -326,6 +335,7 @@ class TmuxManager:
 
     async def rename_window(self, window_id: str, new_name: str) -> bool:
         """Rename a tmux window by its ID."""
+        self.invalidate_cache()
 
         def _sync_rename() -> bool:
             session = self.get_session()
@@ -346,6 +356,7 @@ class TmuxManager:
 
     async def kill_window(self, window_id: str) -> bool:
         """Kill a tmux window by its ID."""
+        self.invalidate_cache()
 
         def _sync_kill() -> bool:
             session = self.get_session()
@@ -398,6 +409,8 @@ class TmuxManager:
             counter += 1
 
         # Create window in thread
+        self.invalidate_cache()
+
         def _create_and_start() -> tuple[bool, str, str, str]:
             session = self.get_or_create_session()
             try:

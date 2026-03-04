@@ -124,7 +124,7 @@ from .screenshot import text_to_image
 from .session import session_manager
 from .session_monitor import NewMessage, SessionMonitor
 from .terminal_parser import extract_bash_output, is_interactive_ui
-from .tmux_manager import tmux_manager
+from .tmux_manager import SHELL_COMMANDS, tmux_manager
 from .utils import ccbot_dir
 
 logger = logging.getLogger(__name__)
@@ -284,6 +284,9 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         display = session_manager.get_display_name(wid)
         await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
         return
+    if w.pane_current_command in SHELL_COMMANDS:
+        await safe_reply(update.message, "❌ Claude Code has exited.")
+        return
 
     # Send Escape control character (no enter)
     await tmux_manager.send_keys(w.window_id, "\x1b", enter=False)
@@ -307,6 +310,9 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
         await safe_reply(update.message, f"Window '{wid}' no longer exists.")
+        return
+    if w.pane_current_command in SHELL_COMMANDS:
+        await safe_reply(update.message, "❌ Claude Code has exited.")
         return
 
     # Send /usage command to Claude Code TUI
@@ -921,7 +927,16 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     success, message = await session_manager.send_to_window(wid, text)
     if not success:
-        await safe_reply(update.message, f"❌ {message}")
+        if "not running" in message:
+            # Claude Code exited and auto-resume failed — unbind
+            session_manager.unbind_thread(user.id, thread_id)
+            await safe_reply(
+                update.message,
+                f"❌ {message}. Binding removed.\n"
+                "Send a message to start a new session.",
+            )
+        else:
+            await safe_reply(update.message, f"❌ {message}")
         return
 
     # Start background capture for ! bash command output
@@ -1497,6 +1512,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         w = await tmux_manager.find_window_by_id(window_id)
         if not w:
             await query.answer("Window not found", show_alert=True)
+            return
+        if w.pane_current_command in SHELL_COMMANDS:
+            await query.answer("Claude Code has exited", show_alert=True)
             return
 
         await tmux_manager.send_keys(
