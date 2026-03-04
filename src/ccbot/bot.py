@@ -905,23 +905,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
-    if w.pane_current_command in SHELL_COMMANDS:
-        display = session_manager.get_display_name(wid)
-        logger.info(
-            "Claude Code exited: window %s running %s, unbinding (user=%d, thread=%d)",
-            display,
-            w.pane_current_command,
-            user.id,
-            thread_id,
-        )
-        session_manager.unbind_thread(user.id, thread_id)
-        await safe_reply(
-            update.message,
-            f"❌ Claude Code has exited in window '{display}'. Binding removed.\n"
-            "Send a message to start a new session.",
-        )
-        return
-
     await update.message.chat.send_action(ChatAction.TYPING)
     await enqueue_status_update(context.bot, user.id, wid, None, thread_id=thread_id)
 
@@ -944,7 +927,16 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     success, message = await session_manager.send_to_window(wid, text)
     if not success:
-        await safe_reply(update.message, f"❌ {message}")
+        if "not running" in message:
+            # Claude Code exited and auto-resume failed — unbind
+            session_manager.unbind_thread(user.id, thread_id)
+            await safe_reply(
+                update.message,
+                f"❌ {message}. Binding removed.\n"
+                "Send a message to start a new session.",
+            )
+        else:
+            await safe_reply(update.message, f"❌ {message}")
         return
 
     # Start background capture for ! bash command output

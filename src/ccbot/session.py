@@ -24,6 +24,7 @@ Key methods for thread binding access:
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,27 @@ from .transcript_parser import TranscriptParser
 from .utils import atomic_write_json
 
 logger = logging.getLogger(__name__)
+
+# Patterns for detecting Claude Code resume commands in pane output
+_RESUME_CMD_RE = re.compile(r"(claude\s+(?:--resume|-r)\s+\S+)")
+_STOPPED_RE = re.compile(r"Stopped\s+.*claude", re.IGNORECASE)
+
+
+def _extract_resume_command(pane_text: str) -> str | None:
+    """Extract a resume command from pane content after Claude Code exit.
+
+    Detects two patterns:
+      - Suspended process: ``[1]+ Stopped  claude`` → returns ``"fg"``
+      - Exited with resume hint: ``claude --resume <id>`` → returns the full command
+
+    Returns None if no resume path is detected.
+    """
+    if _STOPPED_RE.search(pane_text):
+        return "fg"
+    match = _RESUME_CMD_RE.search(pane_text)
+    if match:
+        return match.group(1)
+    return None
 
 
 @dataclass
@@ -769,7 +791,8 @@ class SessionManager:
     async def send_to_window(self, window_id: str, text: str) -> tuple[bool, str]:
         """Send text to a tmux window by ID.
 
-        Refuses to send if the pane is running a bare shell (Claude Code exited).
+        If the pane is running a bare shell (Claude Code exited), attempts
+        to auto-resume via ``fg`` or ``claude --resume <id>`` before sending.
         """
         display = self.get_display_name(window_id)
         logger.debug(
@@ -782,17 +805,59 @@ class SessionManager:
         if not window:
             return False, "Window not found (may have been closed)"
         if window.pane_current_command in SHELL_COMMANDS:
-            logger.warning(
-                "Refusing to send keys to %s (%s): pane is running %s (Claude Code exited)",
-                window_id,
-                display,
-                window.pane_current_command,
-            )
-            return False, "Claude Code is not running (session exited)"
+            resumed = await self._try_resume_claude(window_id, display)
+            if not resumed:
+                return False, "Claude Code is not running (session exited)"
         success = await tmux_manager.send_keys(window.window_id, text)
         if success:
             return True, f"Sent to {display}"
         return False, "Failed to send keys"
+
+    async def _try_resume_claude(self, window_id: str, display: str) -> bool:
+        """Attempt to resume Claude Code when pane has dropped to a shell.
+
+        Detects ``fg`` (suspended process) and ``claude --resume <id>``
+        (exited session) patterns in the pane content.  Sends the appropriate
+        command and waits for Claude Code to take over the terminal.
+
+        Returns True if Claude Code is running after the attempt.
+        """
+        pane_text = await tmux_manager.capture_pane(window_id)
+        if not pane_text:
+            return False
+
+        resume_cmd = _extract_resume_command(pane_text)
+        if not resume_cmd:
+            logger.warning(
+                "No resume command found in %s (%s), cannot auto-resume",
+                window_id,
+                display,
+            )
+            return False
+
+        logger.info(
+            "Auto-resuming Claude Code in %s (%s): %s",
+            window_id,
+            display,
+            resume_cmd,
+        )
+        await tmux_manager.send_keys(window_id, resume_cmd)
+
+        # Wait for Claude Code to take over the terminal
+        max_wait = 3.0 if resume_cmd == "fg" else 15.0
+        elapsed = 0.0
+        while elapsed < max_wait:
+            await asyncio.sleep(0.5)
+            elapsed += 0.5
+            w = await tmux_manager.find_window_by_id(window_id)
+            if w and w.pane_current_command not in SHELL_COMMANDS:
+                # Claude Code is running again — give TUI a moment to init
+                await asyncio.sleep(1.0)
+                logger.info("Claude Code resumed in %s (%s)", window_id, display)
+                return True
+
+        logger.warning("Auto-resume timed out for %s (%s)", window_id, display)
+        return False
 
     # --- Message history ---
 
