@@ -31,7 +31,7 @@ from typing import Any
 import aiofiles
 
 from .config import config
-from .tmux_manager import tmux_manager
+from .tmux_manager import SHELL_COMMANDS, tmux_manager
 from .transcript_parser import TranscriptParser
 from .utils import atomic_write_json
 
@@ -767,7 +767,10 @@ class SessionManager:
     # --- Tmux helpers ---
 
     async def send_to_window(self, window_id: str, text: str) -> tuple[bool, str]:
-        """Send text to a tmux window by ID."""
+        """Send text to a tmux window by ID.
+
+        Refuses to send if the pane is running a bare shell (Claude Code exited).
+        """
         display = self.get_display_name(window_id)
         logger.debug(
             "send_to_window: window_id=%s (%s), text_len=%d",
@@ -778,6 +781,14 @@ class SessionManager:
         window = await tmux_manager.find_window_by_id(window_id)
         if not window:
             return False, "Window not found (may have been closed)"
+        if window.pane_current_command in SHELL_COMMANDS:
+            logger.warning(
+                "Refusing to send keys to %s (%s): pane is running %s (Claude Code exited)",
+                window_id,
+                display,
+                window.pane_current_command,
+            )
+            return False, "Claude Code is not running (session exited)"
         success = await tmux_manager.send_keys(window.window_id, text)
         if success:
             return True, f"Sent to {display}"

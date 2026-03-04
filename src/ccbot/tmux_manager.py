@@ -24,6 +24,12 @@ from .config import SENSITIVE_ENV_VARS, config
 
 logger = logging.getLogger(__name__)
 
+# Process names that indicate a bare shell (Claude Code has exited).
+# Used to prevent sending user input to a shell prompt.
+SHELL_COMMANDS = frozenset({
+    "bash", "zsh", "sh", "fish", "dash", "tcsh", "csh", "ksh", "ash",
+})
+
 
 @dataclass
 class TmuxWindow:
