@@ -486,6 +486,22 @@ class TranscriptParser:
             last_cmd_name = None
 
             if msg_type == "assistant":
+                # Pre-scan: check if this message contains an interactive
+                # tool_use (ExitPlanMode / AskUserQuestion).  When present,
+                # suppress text entries from this same message — those text
+                # blocks are preamble that the terminal capture already
+                # includes.  Emitting them as separate content messages
+                # causes a race: the content message clears the interactive
+                # UI state set by the status poller, leading to a duplicate
+                # interactive message being sent by the JSONL callable.
+                _INTERACTIVE_TOOLS = frozenset({"AskUserQuestion", "ExitPlanMode"})
+                has_interactive_tool = any(
+                    isinstance(b, dict)
+                    and b.get("type") == "tool_use"
+                    and b.get("name") in _INTERACTIVE_TOOLS
+                    for b in content
+                )
+
                 # Process content blocks
                 has_text = False
                 for block in content:
@@ -494,6 +510,11 @@ class TranscriptParser:
                     btype = block.get("type", "")
 
                     if btype == "text":
+                        # Skip text blocks when an interactive tool_use is
+                        # present in the same message to avoid clearing the
+                        # interactive UI state prematurely.
+                        if has_interactive_tool:
+                            continue
                         t = block.get("text", "").strip()
                         if t and t != cls._NO_CONTENT_PLACEHOLDER:
                             result.append(
