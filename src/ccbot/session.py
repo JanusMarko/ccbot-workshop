@@ -920,5 +920,89 @@ class SessionManager:
 
         return all_messages, len(all_messages)
 
+    async def get_session_death_context(
+        self, window_id: str, max_chars: int = 500
+    ) -> str:
+        """Extract last-activity context from a session's JSONL for crash diagnostics.
+
+        Reads the tail of the JSONL file and returns a formatted summary of
+        what Claude was doing when the session died (last tools, pending
+        operations, last message text).
+
+        Returns empty string if session or file is unavailable.
+        """
+        session = await self.resolve_session_for_window(window_id)
+        if not session or not session.file_path:
+            return ""
+
+        file_path = Path(session.file_path)
+        if not file_path.exists():
+            return ""
+
+        # Read last ~8KB of the JSONL file (efficient tail)
+        try:
+            file_size = file_path.stat().st_size
+            tail_offset = max(0, file_size - 8192)
+
+            entries: list[dict] = []
+            async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
+                if tail_offset > 0:
+                    await f.seek(tail_offset)
+                    await f.readline()  # skip partial first line
+
+                while True:
+                    line = await f.readline()
+                    if not line:
+                        break
+                    data = TranscriptParser.parse_line(line)
+                    if data:
+                        entries.append(data)
+        except OSError as e:
+            logger.debug("Error reading session file for death context: %s", e)
+            return ""
+
+        if not entries:
+            return ""
+
+        parsed_entries, remaining_pending = TranscriptParser.parse_entries(entries)
+        if not parsed_entries:
+            return ""
+
+        lines: list[str] = []
+
+        # Pending tools (were mid-execution when session died)
+        if remaining_pending:
+            for tool_id, info in remaining_pending.items():
+                lines.append(f"\u2022 Running: {info.summary}")
+
+        # Last tool_use entries (most recent first)
+        tool_entries = [e for e in parsed_entries if e.content_type == "tool_use"]
+        if tool_entries and not remaining_pending:
+            last_tool = tool_entries[-1]
+            lines.append(f"\u2022 Last tool: {last_tool.text}")
+
+        # Last assistant text message
+        text_entries = [
+            e
+            for e in parsed_entries
+            if e.content_type == "text" and e.role == "assistant"
+        ]
+        if text_entries:
+            last_text = text_entries[-1].text.strip()
+            if last_text:
+                # Truncate long messages
+                if len(last_text) > 200:
+                    last_text = last_text[:200] + "..."
+                lines.append(f'\u2022 Last message: "{last_text}"')
+
+        if not lines:
+            return ""
+
+        result = "Last activity:\n" + "\n".join(lines)
+        # Enforce overall length limit
+        if len(result) > max_chars:
+            result = result[:max_chars] + "..."
+        return result
+
 
 session_manager = SessionManager()

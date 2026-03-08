@@ -223,15 +223,31 @@ async def status_poll_loop(bot: Bot) -> None:
                                     oom_info.get("line", ""),
                                 )
 
+                        # Extract last-activity context from JSONL
+                        death_context = ""
+                        try:
+                            death_context = (
+                                await session_manager.get_session_death_context(wid)
+                            )
+                        except Exception as e:
+                            logger.debug(
+                                "Failed to get death context for %s: %s",
+                                wid,
+                                e,
+                            )
+
                         # Notify user in the topic
                         try:
                             chat_id = session_manager.resolve_chat_id(
                                 user_id, thread_id
                             )
+                            msg = f"\u26a0\ufe0f {reason}: {display_name}"
+                            if death_context:
+                                msg += f"\n\n{death_context}"
                             await safe_send(
                                 bot,
                                 chat_id,
-                                f"\u26a0\ufe0f {reason}: {display_name}",
+                                msg,
                                 message_thread_id=thread_id,
                             )
                         except Exception as e:

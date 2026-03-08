@@ -1,8 +1,10 @@
 """Tests for SessionManager pure dict operations."""
 
+import json
+
 import pytest
 
-from ccbot.session import SessionManager
+from ccbot.session import ClaudeSession, SessionManager
 
 
 @pytest.fixture
@@ -186,3 +188,197 @@ class TestIsWindowId:
         assert mgr._is_window_id("@") is False
         assert mgr._is_window_id("") is False
         assert mgr._is_window_id("@abc") is False
+
+
+def _make_jsonl_entry(
+    msg_type: str,
+    content: list,
+    session_id: str = "test-session",
+) -> str:
+    """Build a JSONL line for testing."""
+    return json.dumps(
+        {
+            "type": msg_type,
+            "timestamp": "2026-03-07T20:00:00.000Z",
+            "sessionId": session_id,
+            "cwd": "/tmp/test",
+            "message": {"content": content},
+        }
+    )
+
+
+class TestGetSessionDeathContext:
+    """Tests for get_session_death_context — crash diagnostics from JSONL."""
+
+    @pytest.mark.asyncio
+    async def test_returns_last_tool_use(self, mgr: SessionManager, tmp_path) -> None:
+        """Shows the last tool that was running when session died."""
+        jsonl = tmp_path / "session.jsonl"
+        lines = [
+            _make_jsonl_entry(
+                "assistant",
+                [{"type": "text", "text": "Let me read the file."}],
+            ),
+            _make_jsonl_entry(
+                "assistant",
+                [
+                    {
+                        "type": "tool_use",
+                        "id": "tool_1",
+                        "name": "Bash",
+                        "input": {"command": "npm run test:e2e"},
+                    }
+                ],
+            ),
+            # No tool_result — tool was mid-execution when session died
+        ]
+        jsonl.write_text("\n".join(lines) + "\n")
+
+        # Mock resolve_session_for_window to return our test file
+        async def mock_resolve(wid):
+            return ClaudeSession(
+                session_id="test",
+                summary="",
+                message_count=2,
+                file_path=str(jsonl),
+            )
+
+        mgr.resolve_session_for_window = mock_resolve  # type: ignore[assignment]
+        result = await mgr.get_session_death_context("@1")
+
+        assert "Last activity:" in result
+        assert "Running:" in result
+        assert "Bash" in result
+        assert "npm run test:e2e" in result
+
+    @pytest.mark.asyncio
+    async def test_returns_last_text_message(
+        self, mgr: SessionManager, tmp_path
+    ) -> None:
+        """Shows the last assistant text message."""
+        jsonl = tmp_path / "session.jsonl"
+        lines = [
+            _make_jsonl_entry(
+                "assistant",
+                [{"type": "text", "text": "All 4 test agents running."}],
+            ),
+        ]
+        jsonl.write_text("\n".join(lines) + "\n")
+
+        async def mock_resolve(wid):
+            return ClaudeSession(
+                session_id="test",
+                summary="",
+                message_count=1,
+                file_path=str(jsonl),
+            )
+
+        mgr.resolve_session_for_window = mock_resolve  # type: ignore[assignment]
+        result = await mgr.get_session_death_context("@1")
+
+        assert "Last message:" in result
+        assert "All 4 test agents running." in result
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_for_missing_session(self, mgr: SessionManager) -> None:
+        """Returns empty string when session can't be resolved."""
+
+        async def mock_resolve(wid):
+            return None
+
+        mgr.resolve_session_for_window = mock_resolve  # type: ignore[assignment]
+        result = await mgr.get_session_death_context("@1")
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_returns_empty_for_missing_file(self, mgr: SessionManager) -> None:
+        """Returns empty string when JSONL file doesn't exist."""
+
+        async def mock_resolve(wid):
+            return ClaudeSession(
+                session_id="test",
+                summary="",
+                message_count=0,
+                file_path="/nonexistent/path.jsonl",
+            )
+
+        mgr.resolve_session_for_window = mock_resolve  # type: ignore[assignment]
+        result = await mgr.get_session_death_context("@1")
+        assert result == ""
+
+    @pytest.mark.asyncio
+    async def test_truncates_long_messages(self, mgr: SessionManager, tmp_path) -> None:
+        """Long assistant text is truncated to ~200 chars."""
+        jsonl = tmp_path / "session.jsonl"
+        long_text = "x" * 500
+        lines = [
+            _make_jsonl_entry(
+                "assistant",
+                [{"type": "text", "text": long_text}],
+            ),
+        ]
+        jsonl.write_text("\n".join(lines) + "\n")
+
+        async def mock_resolve(wid):
+            return ClaudeSession(
+                session_id="test",
+                summary="",
+                message_count=1,
+                file_path=str(jsonl),
+            )
+
+        mgr.resolve_session_for_window = mock_resolve  # type: ignore[assignment]
+        result = await mgr.get_session_death_context("@1")
+
+        assert "..." in result
+        # The truncated text should be at most 200 chars + "..."
+        for line in result.split("\n"):
+            if "Last message:" in line:
+                # Extract the quoted message content
+                msg_part = line.split('"')[1] if '"' in line else ""
+                assert len(msg_part) <= 204  # 200 + "..."
+
+    @pytest.mark.asyncio
+    async def test_completed_tool_shows_last_tool(
+        self, mgr: SessionManager, tmp_path
+    ) -> None:
+        """When tool completed (has result), shows as 'Last tool' not 'Running'."""
+        jsonl = tmp_path / "session.jsonl"
+        lines = [
+            _make_jsonl_entry(
+                "assistant",
+                [
+                    {
+                        "type": "tool_use",
+                        "id": "tool_1",
+                        "name": "Read",
+                        "input": {"file_path": "src/main.py"},
+                    }
+                ],
+            ),
+            _make_jsonl_entry(
+                "user",
+                [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tool_1",
+                        "content": "file contents here",
+                    }
+                ],
+            ),
+        ]
+        jsonl.write_text("\n".join(lines) + "\n")
+
+        async def mock_resolve(wid):
+            return ClaudeSession(
+                session_id="test",
+                summary="",
+                message_count=2,
+                file_path=str(jsonl),
+            )
+
+        mgr.resolve_session_for_window = mock_resolve  # type: ignore[assignment]
+        result = await mgr.get_session_death_context("@1")
+
+        assert "Last tool:" in result
+        assert "Running:" not in result
