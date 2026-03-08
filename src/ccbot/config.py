@@ -96,6 +96,15 @@ class Config:
         # Starting directory for the directory browser
         self.browse_root = os.getenv("CCBOT_BROWSE_ROOT", "")
 
+        # Memory monitoring (opt-in)
+        self.memory_monitor_enabled = (
+            os.getenv("CCBOT_MEMORY_MONITOR", "").lower() == "true"
+        )
+        self.memory_warning_mb = float(os.getenv("CCBOT_MEMORY_WARNING_MB", "2048"))
+        self.memory_check_interval = float(
+            os.getenv("CCBOT_MEMORY_CHECK_INTERVAL", "30")
+        )
+
         # Scrub sensitive vars from os.environ so child processes never inherit them.
         # Values are already captured in Config attributes above.
         for var in SENSITIVE_ENV_VARS:

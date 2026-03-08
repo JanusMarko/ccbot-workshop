@@ -24,6 +24,8 @@ from telegram import Bot
 from telegram.constants import ChatAction
 from telegram.error import BadRequest
 
+from ..config import config
+from ..process_info import get_process_tree_pids, get_tree_rss_mb, was_pid_oom_killed
 from ..session import session_manager
 from ..terminal_parser import is_interactive_ui, parse_status_line
 from ..tmux_manager import tmux_manager
@@ -35,8 +37,16 @@ from .interactive_ui import (
 )
 from .cleanup import clear_topic_state
 from .message_queue import enqueue_status_update, get_message_queue
+from .message_sender import safe_send
 
 logger = logging.getLogger(__name__)
+
+# Track pane PIDs so we can check OOM after window death
+_window_pids: dict[str, int] = {}  # window_id → shell PID
+
+# Memory monitoring state
+_last_memory_check: float = 0.0
+_memory_warned: set[str] = set()  # window_ids that have been warned
 
 # Status polling interval
 STATUS_POLL_INTERVAL = 1.0  # seconds - faster response (rate limiting at send layer)
@@ -182,6 +192,54 @@ async def status_poll_loop(bot: Bot) -> None:
                     # Clean up stale bindings (window no longer exists)
                     w = await tmux_manager.find_window_by_id(wid)
                     if not w:
+                        display_name = session_manager.get_display_name(wid)
+                        shell_pid = _window_pids.pop(wid, None)
+                        _memory_warned.discard(wid)
+
+                        # Check if the window was killed by OOM
+                        reason = "Session ended"
+                        if shell_pid:
+                            try:
+                                descendants = await get_process_tree_pids(shell_pid)
+                            except Exception:
+                                descendants = []
+                            oom_info = await was_pid_oom_killed(shell_pid, descendants)
+                            if oom_info:
+                                rss_kb = oom_info.get("rss_kb")
+                                rss_str = (
+                                    f", RSS: {int(str(rss_kb)) // 1024}MB"
+                                    if rss_kb
+                                    else ""
+                                )
+                                reason = (
+                                    f"Session killed by OOM killer "
+                                    f"(process: {oom_info['process_name']}"
+                                    f"{rss_str})"
+                                )
+                                logger.warning(
+                                    "OOM kill detected for window %s (pid=%d): %s",
+                                    wid,
+                                    shell_pid,
+                                    oom_info.get("line", ""),
+                                )
+
+                        # Notify user in the topic
+                        try:
+                            chat_id = session_manager.resolve_chat_id(
+                                user_id, thread_id
+                            )
+                            await safe_send(
+                                bot,
+                                chat_id,
+                                f"\u26a0\ufe0f {reason}: {display_name}",
+                                message_thread_id=thread_id,
+                            )
+                        except Exception as e:
+                            logger.debug(
+                                "Failed to send session-end notification: %s",
+                                e,
+                            )
+
                         session_manager.unbind_thread(user_id, thread_id)
                         await clear_topic_state(user_id, thread_id, bot)
                         logger.info(
@@ -191,6 +249,12 @@ async def status_poll_loop(bot: Bot) -> None:
                             wid,
                         )
                         continue
+
+                    # Track pane PID for OOM detection on death
+                    if wid not in _window_pids:
+                        pid = await tmux_manager.get_pane_pid(wid)
+                        if pid:
+                            _window_pids[wid] = pid
 
                     # UI detection happens unconditionally in update_status_message.
                     # Status enqueue is skipped inside update_status_message when
@@ -210,7 +274,55 @@ async def status_poll_loop(bot: Bot) -> None:
                         f"Status update error for user {user_id} "
                         f"thread {thread_id}: {e}"
                     )
+
+            # Periodic memory monitoring (opt-in)
+            await _check_memory_usage(bot)
         except Exception as e:
             logger.error(f"Status poll loop error: {e}")
 
         await asyncio.sleep(STATUS_POLL_INTERVAL)
+
+
+async def _check_memory_usage(bot: Bot) -> None:
+    """Check memory usage of all tracked windows and warn if above threshold."""
+    global _last_memory_check
+
+    if not config.memory_monitor_enabled:
+        return
+
+    now = time.monotonic()
+    if now - _last_memory_check < config.memory_check_interval:
+        return
+    _last_memory_check = now
+
+    for user_id, thread_id, wid in session_manager.all_thread_bindings():
+        pid = _window_pids.get(wid)
+        if not pid:
+            continue
+        try:
+            rss_mb = await get_tree_rss_mb(pid)
+            if rss_mb is None:
+                continue
+
+            if rss_mb > config.memory_warning_mb and wid not in _memory_warned:
+                _memory_warned.add(wid)
+                display_name = session_manager.get_display_name(wid)
+                chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+                await safe_send(
+                    bot,
+                    chat_id,
+                    f"\u26a0\ufe0f High memory usage: {display_name} "
+                    f"is using {rss_mb:.0f}MB RSS",
+                    message_thread_id=thread_id,
+                )
+                logger.warning(
+                    "Memory warning for window %s (pid=%d): %.0fMB",
+                    wid,
+                    pid,
+                    rss_mb,
+                )
+            elif rss_mb <= config.memory_warning_mb * 0.8 and wid in _memory_warned:
+                # Reset warning when memory drops to 80% of threshold
+                _memory_warned.discard(wid)
+        except Exception as e:
+            logger.debug("Memory check error for window %s: %s", wid, e)
