@@ -205,6 +205,28 @@ class TmuxManager:
         logger.debug("Window not found by id: %s", window_id)
         return None
 
+    async def get_pane_pid(self, window_id: str) -> int | None:
+        """Get the PID of the shell process in a window's active pane."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "tmux",
+                "display-message",
+                "-p",
+                "-t",
+                window_id,
+                "#{pane_pid}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode == 0:
+                pid_str = stdout.decode("utf-8").strip()
+                if pid_str:
+                    return int(pid_str)
+        except (OSError, ValueError) as e:
+            logger.debug("Failed to get pane PID for %s: %s", window_id, e)
+        return None
+
     async def capture_pane(self, window_id: str, with_ansi: bool = False) -> str | None:
         """Capture the visible text content of a window's active pane.
 
