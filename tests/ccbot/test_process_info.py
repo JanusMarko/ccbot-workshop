@@ -6,6 +6,7 @@ import pytest
 
 from ccbot.process_info import (
     _parse_dmesg_for_oom_kills,
+    get_mem_available_mb,
     get_process_rss_mb,
     was_pid_oom_killed,
 )
@@ -153,4 +154,43 @@ class TestWasPidOomKilled:
             return_value=[],
         ):
             result = await was_pid_oom_killed(1234)
+        assert result is None
+
+
+class TestGetMemAvailableMb:
+    """Test reading MemAvailable from /proc/meminfo."""
+
+    @pytest.mark.asyncio
+    async def test_parses_standard_meminfo(self) -> None:
+        meminfo_content = (
+            "MemTotal:       16384000 kB\n"
+            "MemFree:         2048000 kB\n"
+            "MemAvailable:    8192000 kB\n"
+            "Buffers:          512000 kB\n"
+        )
+        with patch("ccbot.process_info.Path") as mock_path:
+            mock_file = mock_path.return_value
+            mock_file.exists.return_value = True
+            mock_file.read_text.return_value = meminfo_content
+            result = await get_mem_available_mb()
+        assert result is not None
+        assert abs(result - 8000.0) < 0.1  # 8192000 kB = 8000 MB
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_file_missing(self) -> None:
+        with patch("ccbot.process_info.Path") as mock_path:
+            mock_file = mock_path.return_value
+            mock_file.exists.return_value = False
+            result = await get_mem_available_mb()
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_returns_none_for_malformed_input(self) -> None:
+        meminfo_content = "MemTotal:       16384000 kB\nMemFree: garbage\n"
+        with patch("ccbot.process_info.Path") as mock_path:
+            mock_file = mock_path.return_value
+            mock_file.exists.return_value = True
+            mock_file.read_text.return_value = meminfo_content
+            result = await get_mem_available_mb()
+        # MemAvailable line is absent entirely → None
         assert result is None

@@ -8,12 +8,15 @@ Provides background polling of terminal status lines for all active users:
   - Periodically probes topic existence via send_chat_action (TYPING);
     raises BadRequest on deleted topics; cleans up deleted topics (kills
     tmux window + unbinds thread)
+  - Proactive OOM prevention: system-wide MemAvailable monitoring with
+    escalating actions (warn → interrupt → kill highest-RSS window)
 
 Key components:
   - STATUS_POLL_INTERVAL: Polling frequency (1 second)
   - TOPIC_CHECK_INTERVAL: Topic existence probe frequency (60 seconds)
   - status_poll_loop: Background polling task
   - update_status_message: Poll and enqueue status updates
+  - _check_system_memory: Escalating system memory pressure response
 """
 
 import asyncio
@@ -25,7 +28,12 @@ from telegram.constants import ChatAction
 from telegram.error import BadRequest
 
 from ..config import config
-from ..process_info import get_process_tree_pids, get_tree_rss_mb, was_pid_oom_killed
+from ..process_info import (
+    get_mem_available_mb,
+    get_process_tree_pids,
+    get_tree_rss_mb,
+    was_pid_oom_killed,
+)
 from ..session import session_manager
 from ..terminal_parser import is_interactive_ui, parse_status_line
 from ..tmux_manager import tmux_manager
@@ -44,9 +52,15 @@ logger = logging.getLogger(__name__)
 # Track pane PIDs so we can check OOM after window death
 _window_pids: dict[str, int] = {}  # window_id → shell PID
 
-# Memory monitoring state
+# Per-window memory monitoring state
 _last_memory_check: float = 0.0
 _memory_warned: set[str] = set()  # window_ids that have been warned
+
+# System-wide memory pressure escalation state
+# Levels: 0=ok, 1=warned, 2=interrupted, 3=killed
+_sys_mem_level: int = 0
+_sys_mem_cycles_at_level: int = 0  # how many check cycles at current level
+_last_sys_mem_check: float = 0.0
 
 # Status polling interval
 STATUS_POLL_INTERVAL = 1.0  # seconds - faster response (rate limiting at send layer)
@@ -291,8 +305,9 @@ async def status_poll_loop(bot: Bot) -> None:
                         f"thread {thread_id}: {e}"
                     )
 
-            # Periodic memory monitoring (opt-in)
+            # Periodic memory monitoring
             await _check_memory_usage(bot)
+            await _check_system_memory(bot)
         except Exception as e:
             logger.error(f"Status poll loop error: {e}")
 
@@ -342,3 +357,204 @@ async def _check_memory_usage(bot: Bot) -> None:
                 _memory_warned.discard(wid)
         except Exception as e:
             logger.debug("Memory check error for window %s: %s", wid, e)
+
+
+async def _find_highest_rss_window() -> (
+    tuple[str, int, int, float] | None
+):
+    """Find the window with the highest process tree RSS.
+
+    Returns (window_id, user_id, thread_id, rss_mb) or None.
+    """
+    highest: tuple[str, int, int, float] | None = None
+    for user_id, thread_id, wid in session_manager.all_thread_bindings():
+        pid = _window_pids.get(wid)
+        if not pid:
+            continue
+        try:
+            rss_mb = await get_tree_rss_mb(pid)
+            if rss_mb is not None and (highest is None or rss_mb > highest[3]):
+                highest = (wid, user_id, thread_id, rss_mb)
+        except Exception:
+            continue
+    return highest
+
+
+# Cooldown constants (in check cycles, not seconds — cycle = memory_check_interval)
+# With default CCBOT_MEMORY_CHECK_INTERVAL=10: 2 cycles ≈ 20s, 3 cycles ≈ 30s
+_INTERRUPT_COOLDOWN_CYCLES = 2  # wait 2 cycles after interrupt before kill
+_KILL_COOLDOWN_CYCLES = 3  # wait 3 cycles after kill before another kill
+
+
+async def _check_system_memory(bot: Bot) -> None:
+    """Check system-wide MemAvailable and escalate if memory is critically low.
+
+    Escalation levels (advances at most one level per check cycle):
+      0 → normal
+      1 → warn (notify all topics)
+      2 → interrupt (send Escape to highest-RSS window)
+      3 → kill (kill highest-RSS window)
+    """
+    global _sys_mem_level, _sys_mem_cycles_at_level, _last_sys_mem_check
+
+    if not config.memory_monitor_enabled:
+        return
+
+    now = time.monotonic()
+    if now - _last_sys_mem_check < config.memory_check_interval:
+        return
+    _last_sys_mem_check = now
+
+    available = await get_mem_available_mb()
+    if available is None:
+        return  # /proc/meminfo not readable (non-Linux)
+
+    # Determine target level based on available memory
+    if available <= config.mem_avail_kill_mb:
+        target_level = 3
+    elif available <= config.mem_avail_interrupt_mb:
+        target_level = 2
+    elif available <= config.mem_avail_warn_mb:
+        target_level = 1
+    else:
+        target_level = 0
+
+    # Recovery: reset when memory is well above warn threshold (hysteresis)
+    if available > config.mem_avail_warn_mb * 1.5:
+        if _sys_mem_level > 0:
+            logger.info(
+                "System memory recovered: %.0fMB available, resetting escalation",
+                available,
+            )
+        _sys_mem_level = 0
+        _sys_mem_cycles_at_level = 0
+        return
+
+    # No escalation needed
+    if target_level == 0:
+        _sys_mem_level = 0
+        _sys_mem_cycles_at_level = 0
+        return
+
+    # Track cycles at current level
+    _sys_mem_cycles_at_level += 1
+
+    # Advance at most one level per cycle
+    new_level = min(target_level, _sys_mem_level + 1)
+
+    # Enforce cooldowns before escalating
+    if new_level == 3 and _sys_mem_level == 2:
+        if _sys_mem_cycles_at_level < _INTERRUPT_COOLDOWN_CYCLES:
+            logger.debug(
+                "Interrupt cooldown: %d/%d cycles",
+                _sys_mem_cycles_at_level,
+                _INTERRUPT_COOLDOWN_CYCLES,
+            )
+            return
+    if new_level == 3 and _sys_mem_level == 3:
+        if _sys_mem_cycles_at_level < _KILL_COOLDOWN_CYCLES:
+            logger.debug(
+                "Kill cooldown: %d/%d cycles",
+                _sys_mem_cycles_at_level,
+                _KILL_COOLDOWN_CYCLES,
+            )
+            return
+
+    # Downgrade level when pressure has eased
+    if new_level < _sys_mem_level:
+        _sys_mem_level = new_level
+        _sys_mem_cycles_at_level = 0
+        return
+
+    # Only act when level actually changes (or kill repeats)
+    if new_level <= _sys_mem_level and new_level < 3:
+        return
+
+    # Reset cycle counter on level change
+    if new_level != _sys_mem_level:
+        _sys_mem_cycles_at_level = 0
+    _sys_mem_level = new_level
+
+    # === Level 1: Warn all topics ===
+    if new_level == 1:
+        logger.warning("System memory low: %.0fMB available", available)
+        for user_id, thread_id, _wid in session_manager.all_thread_bindings():
+            try:
+                chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+                await safe_send(
+                    bot,
+                    chat_id,
+                    f"\u26a0\ufe0f System memory low: {available:.0f}MB available. "
+                    "Consider reducing parallel workloads.",
+                    message_thread_id=thread_id,
+                )
+            except Exception as e:
+                logger.debug("Failed to send memory warning: %s", e)
+
+    # === Level 2: Interrupt highest-RSS window ===
+    elif new_level == 2:
+        target = await _find_highest_rss_window()
+        if not target:
+            logger.warning(
+                "Memory critical (%.0fMB available) but no windows to interrupt",
+                available,
+            )
+            return
+        wid, user_id, thread_id, rss_mb = target
+        display_name = session_manager.get_display_name(wid)
+        logger.warning(
+            "Memory critical (%.0fMB available) — interrupting %s (%.0fMB RSS)",
+            available,
+            display_name,
+            rss_mb,
+        )
+        await tmux_manager.send_keys(wid, "Escape", enter=False, literal=False)
+        try:
+            chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+            await safe_send(
+                bot,
+                chat_id,
+                f"\u26a0\ufe0f Memory critical ({available:.0f}MB available) "
+                f"\u2014 interrupted {display_name} ({rss_mb:.0f}MB RSS)",
+                message_thread_id=thread_id,
+            )
+        except Exception as e:
+            logger.debug("Failed to send interrupt notification: %s", e)
+
+    # === Level 3: Kill highest-RSS window ===
+    elif new_level == 3:
+        target = await _find_highest_rss_window()
+        if not target:
+            logger.warning(
+                "Memory emergency (%.0fMB available) but no windows to kill",
+                available,
+            )
+            _sys_mem_level = 0
+            _sys_mem_cycles_at_level = 0
+            return
+        wid, user_id, thread_id, rss_mb = target
+        display_name = session_manager.get_display_name(wid)
+        logger.error(
+            "Memory emergency (%.0fMB available) — killing %s (%.0fMB RSS)",
+            available,
+            display_name,
+            rss_mb,
+        )
+        await tmux_manager.kill_window(wid)
+        _window_pids.pop(wid, None)
+        _memory_warned.discard(wid)
+        try:
+            chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+            await safe_send(
+                bot,
+                chat_id,
+                f"\U0001f6a8 Memory emergency ({available:.0f}MB available) "
+                f"\u2014 killed {display_name} ({rss_mb:.0f}MB RSS) "
+                "to prevent system OOM",
+                message_thread_id=thread_id,
+            )
+        except Exception as e:
+            logger.debug("Failed to send kill notification: %s", e)
+        session_manager.unbind_thread(user_id, thread_id)
+        await clear_topic_state(user_id, thread_id, bot)
+        _sys_mem_cycles_at_level = 0  # reset for next kill cooldown

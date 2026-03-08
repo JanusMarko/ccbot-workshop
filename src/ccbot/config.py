@@ -96,13 +96,25 @@ class Config:
         # Starting directory for the directory browser
         self.browse_root = os.getenv("CCBOT_BROWSE_ROOT", "")
 
-        # Memory monitoring (opt-in)
+        # Memory monitoring (on by default, opt-out with CCBOT_MEMORY_MONITOR=false)
         self.memory_monitor_enabled = (
-            os.getenv("CCBOT_MEMORY_MONITOR", "").lower() == "true"
+            os.getenv("CCBOT_MEMORY_MONITOR", "true").lower() != "false"
         )
         self.memory_warning_mb = float(os.getenv("CCBOT_MEMORY_WARNING_MB", "2048"))
         self.memory_check_interval = float(
-            os.getenv("CCBOT_MEMORY_CHECK_INTERVAL", "30")
+            os.getenv("CCBOT_MEMORY_CHECK_INTERVAL", "10")
+        )
+
+        # System-wide memory pressure thresholds (MemAvailable from /proc/meminfo)
+        # Escalation: warn → interrupt (send Escape) → kill (highest-RSS window)
+        self.mem_avail_warn_mb = float(
+            os.getenv("CCBOT_MEM_AVAIL_WARN_MB", "1024")
+        )
+        self.mem_avail_interrupt_mb = float(
+            os.getenv("CCBOT_MEM_AVAIL_INTERRUPT_MB", "512")
+        )
+        self.mem_avail_kill_mb = float(
+            os.getenv("CCBOT_MEM_AVAIL_KILL_MB", "256")
         )
 
         # Scrub sensitive vars from os.environ so child processes never inherit them.

@@ -140,6 +140,28 @@ async def check_recent_oom_kills() -> list[dict[str, object]]:
         return []
 
 
+async def get_mem_available_mb() -> float | None:
+    """Read MemAvailable from /proc/meminfo. Returns MB or None if unavailable.
+
+    MemAvailable is the kernel's estimate of memory available for new
+    allocations without swapping — more accurate than MemFree alone.
+    """
+    meminfo = Path("/proc/meminfo")
+    try:
+        if not meminfo.exists():
+            return None
+        text = await asyncio.to_thread(meminfo.read_text)
+        for line in text.splitlines():
+            if line.startswith("MemAvailable:"):
+                # Format: "MemAvailable:   12345678 kB"
+                parts = line.split()
+                if len(parts) >= 2:
+                    return int(parts[1]) / 1024.0
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 async def was_pid_oom_killed(
     shell_pid: int,
     descendants: list[int] | None = None,
