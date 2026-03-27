@@ -58,8 +58,12 @@ def build_response_parts(
         # Thinking: prefix with "∴ Thinking…" and single newline
         prefix = "∴ Thinking…"
         separator = "\n"
+    elif content_type == "text":
+        # Assistant text: emoji prefix to distinguish from tool calls
+        prefix = "💬"
+        separator = " "
     else:
-        # Plain text: no prefix
+        # Tool use / tool result: no prefix
         prefix = ""
         separator = ""
 
