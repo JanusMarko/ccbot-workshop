@@ -875,15 +875,17 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             dest = inbox_dir / f"{stem}_{int(time.time())}{ext}"
         await tg_file.download_to_drive(dest)
 
-    # Build message for Claude Code
+    # Build message for Claude Code — file context first, then user's instruction
     rel_path = f"docs/inbox/{dest.name}"
     caption = update.message.caption or ""
+    file_notice = (
+        f"A file has been saved to {rel_path} (absolute path: {dest}). "
+        "Read it with your Read tool."
+    )
     if caption:
-        text_to_send = (
-            f"{caption}\n\n(file uploaded: {dest} — read {rel_path} for contents)"
-        )
+        text_to_send = f"{file_notice}\n\n{caption}"
     else:
-        text_to_send = f"(file uploaded: {dest} — read {rel_path} for contents)"
+        text_to_send = file_notice
 
     await update.message.chat.send_action(ChatAction.TYPING)
     clear_status_msg_info(user.id, thread_id)
