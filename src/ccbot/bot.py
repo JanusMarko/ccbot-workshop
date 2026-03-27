@@ -687,6 +687,11 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 # --- Allowed document MIME types for upload ---
 _ALLOWED_DOC_MIME_PREFIXES = ("text/",)
+_ALLOWED_DOC_MIME_TYPES = {
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/msword",
+}
 _ALLOWED_DOC_EXTENSIONS = {
     ".md",
     ".markdown",
@@ -733,11 +738,41 @@ _ALLOWED_DOC_EXTENSIONS = {
     ".log",
     ".diff",
     ".patch",
+    ".pdf",
+    ".docx",
+    ".doc",
 }
 
 
+def _convert_docx_to_markdown(docx_path: Path) -> str:
+    """Extract text from a .docx file and return as markdown."""
+    import docx
+
+    doc = docx.Document(str(docx_path))
+    lines: list[str] = []
+    for para in doc.paragraphs:
+        text = para.text
+        if not text.strip():
+            lines.append("")
+            continue
+        style_name = (para.style.name or "").lower() if para.style else ""
+        if style_name.startswith("heading 1"):
+            lines.append(f"# {text}")
+        elif style_name.startswith("heading 2"):
+            lines.append(f"## {text}")
+        elif style_name.startswith("heading 3"):
+            lines.append(f"### {text}")
+        elif style_name.startswith("heading 4"):
+            lines.append(f"#### {text}")
+        elif style_name.startswith("list"):
+            lines.append(f"- {text}")
+        else:
+            lines.append(text)
+    return "\n\n".join(lines)
+
+
 async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle document uploads: save text/markdown files to session cwd and forward path."""
+    """Handle document uploads: save text/code/PDF/Word files to session cwd and forward path."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         if update.message:
@@ -755,12 +790,13 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Check if file type is allowed
     if (
         not any(mime.startswith(p) for p in _ALLOWED_DOC_MIME_PREFIXES)
+        and mime not in _ALLOWED_DOC_MIME_TYPES
         and ext not in _ALLOWED_DOC_EXTENSIONS
     ):
         await safe_reply(
             update.message,
             f"⚠ Unsupported file type: {file_name}\n"
-            "Only text-based files (Markdown, code, config, etc.) are supported.",
+            "Supported: text files, code, Markdown, PDF, and Word documents.",
         )
         return
 
@@ -808,14 +844,36 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     inbox_dir = Path(ws.cwd) / "docs" / "inbox"
     inbox_dir.mkdir(parents=True, exist_ok=True)
 
-    # Download to {cwd}/docs/inbox/<filename> (deduplicate with timestamp if needed)
-    dest = inbox_dir / file_name
-    if dest.exists():
-        stem = Path(file_name).stem
-        dest = inbox_dir / f"{stem}_{int(time.time())}{ext}"
-
     tg_file = await doc.get_file()
-    await tg_file.download_to_drive(dest)
+    is_docx = ext in (".docx", ".doc") or mime in (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword",
+    )
+
+    if is_docx:
+        # Convert Word documents to Markdown
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            await tg_file.download_to_drive(tmp_path)
+            md_content = await asyncio.to_thread(_convert_docx_to_markdown, tmp_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+        save_name = Path(file_name).stem + ".md"
+        dest = inbox_dir / save_name
+        if dest.exists():
+            dest = inbox_dir / f"{Path(file_name).stem}_{int(time.time())}.md"
+        dest.write_text(md_content, encoding="utf-8")
+    else:
+        # Save PDFs and text files directly
+        dest = inbox_dir / file_name
+        if dest.exists():
+            stem = Path(file_name).stem
+            dest = inbox_dir / f"{stem}_{int(time.time())}{ext}"
+        await tg_file.download_to_drive(dest)
 
     # Build message for Claude Code
     rel_path = f"docs/inbox/{dest.name}"
@@ -835,8 +893,10 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await safe_reply(update.message, f"❌ {message}")
         return
 
+    suffix_note = " (converted from Word to Markdown)" if is_docx else ""
     await safe_reply(
-        update.message, f"📄 File saved to `{rel_path}` and sent to Claude Code."
+        update.message,
+        f"📄 File saved to `{rel_path}`{suffix_note} and sent to Claude Code.",
     )
 
 
