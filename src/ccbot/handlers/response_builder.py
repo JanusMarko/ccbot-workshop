@@ -33,7 +33,7 @@ def build_response_parts(
 
     # User messages: add emoji prefix (no newline)
     if role == "user":
-        prefix = "🟦 "
+        prefix = "💎 "
         separator = ""
         # User messages are typically short, no special processing needed
         if len(text) > 3000:
@@ -56,15 +56,15 @@ def build_response_parts(
     # Format based on content type
     if content_type == "thinking":
         # Thinking: purple prefix
-        prefix = "🟪 Thinking…"
+        prefix = "🧠 Thinking…"
         separator = "\n"
     elif content_type in ("tool_use", "tool_result"):
         # Tool calls: orange prefix
-        prefix = "🟧"
+        prefix = "🛠️"
         separator = " "
     elif content_type == "text":
         # Assistant text: green prefix
-        prefix = "🟩"
+        prefix = "🔮"
         separator = " "
     else:
         prefix = ""
