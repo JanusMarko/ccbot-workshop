@@ -12,6 +12,8 @@ Core responsibilities:
     Unbound topics trigger the directory browser to create a new session.
   - Photo handling: photos sent by user are downloaded and forwarded
     to Claude Code as file paths (photo_handler).
+  - Document handling: Markdown and text files sent by user are saved to
+    {session_cwd}/docs/inbox/ and path forwarded to Claude Code (document_handler).
   - Automatic cleanup: closing a topic kills the associated window
     (topic_closed_handler). Unsupported content (stickers, voice, etc.)
     is rejected with a warning (unsupported_content_handler).
@@ -681,6 +683,223 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     # Confirm to user
     await safe_reply(update.message, "📷 Image sent to Claude Code.")
+
+
+# --- Allowed document MIME types for upload ---
+_ALLOWED_DOC_MIME_PREFIXES = ("text/",)
+_ALLOWED_DOC_MIME_TYPES = {
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/msword",
+}
+_ALLOWED_DOC_EXTENSIONS = {
+    ".md",
+    ".markdown",
+    ".txt",
+    ".csv",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".xml",
+    ".html",
+    ".css",
+    ".js",
+    ".ts",
+    ".py",
+    ".sh",
+    ".bash",
+    ".rs",
+    ".go",
+    ".java",
+    ".c",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".rb",
+    ".pl",
+    ".lua",
+    ".sql",
+    ".r",
+    ".swift",
+    ".kt",
+    ".scala",
+    ".ex",
+    ".exs",
+    ".hs",
+    ".ml",
+    ".clj",
+    ".el",
+    ".vim",
+    ".conf",
+    ".ini",
+    ".cfg",
+    ".env",
+    ".log",
+    ".diff",
+    ".patch",
+    ".pdf",
+    ".docx",
+    ".doc",
+}
+
+
+def _convert_docx_to_markdown(docx_path: Path) -> str:
+    """Extract text from a .docx file and return as markdown."""
+    import docx
+
+    doc = docx.Document(str(docx_path))
+    lines: list[str] = []
+    for para in doc.paragraphs:
+        text = para.text
+        if not text.strip():
+            lines.append("")
+            continue
+        style_name = (para.style.name or "").lower() if para.style else ""
+        if style_name.startswith("heading 1"):
+            lines.append(f"# {text}")
+        elif style_name.startswith("heading 2"):
+            lines.append(f"## {text}")
+        elif style_name.startswith("heading 3"):
+            lines.append(f"### {text}")
+        elif style_name.startswith("heading 4"):
+            lines.append(f"#### {text}")
+        elif style_name.startswith("list"):
+            lines.append(f"- {text}")
+        else:
+            lines.append(text)
+    return "\n\n".join(lines)
+
+
+async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle document uploads: save text/code/PDF/Word files to session cwd and forward path."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        if update.message:
+            await safe_reply(update.message, "You are not authorized to use this bot.")
+        return
+
+    if not update.message or not update.message.document:
+        return
+
+    doc = update.message.document
+    file_name = doc.file_name or "unnamed_document"
+    mime = doc.mime_type or ""
+    ext = Path(file_name).suffix.lower()
+
+    # Check if file type is allowed
+    if (
+        not any(mime.startswith(p) for p in _ALLOWED_DOC_MIME_PREFIXES)
+        and mime not in _ALLOWED_DOC_MIME_TYPES
+        and ext not in _ALLOWED_DOC_EXTENSIONS
+    ):
+        await safe_reply(
+            update.message,
+            f"⚠ Unsupported file type: {file_name}\n"
+            "Supported: text files, code, Markdown, PDF, and Word documents.",
+        )
+        return
+
+    chat = update.message.chat
+    thread_id = _get_thread_id(update)
+    if chat.type in ("group", "supergroup") and thread_id is not None:
+        session_manager.set_group_chat_id(user.id, thread_id, chat.id)
+
+    # Must be in a named topic
+    if thread_id is None:
+        await safe_reply(
+            update.message,
+            "❌ Please use a named topic. Create a new topic to start a session.",
+        )
+        return
+
+    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    if wid is None:
+        await safe_reply(
+            update.message,
+            "❌ No session bound to this topic. Send a text message first to create one.",
+        )
+        return
+
+    w = await tmux_manager.find_window_by_id(wid)
+    if not w:
+        display = session_manager.get_display_name(wid)
+        session_manager.unbind_thread(user.id, thread_id)
+        await safe_reply(
+            update.message,
+            f"❌ Window '{display}' no longer exists. Binding removed.\n"
+            "Send a message to start a new session.",
+        )
+        return
+
+    # Resolve session cwd for the inbox directory
+    ws = session_manager.get_window_state(wid)
+    if not ws.cwd:
+        await safe_reply(
+            update.message,
+            "❌ Session working directory not yet known. Try again in a moment.",
+        )
+        return
+
+    inbox_dir = Path(ws.cwd) / "docs" / "inbox"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+
+    tg_file = await doc.get_file()
+    is_docx = ext in (".docx", ".doc") or mime in (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword",
+    )
+
+    if is_docx:
+        # Convert Word documents to Markdown
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+        try:
+            await tg_file.download_to_drive(tmp_path)
+            md_content = await asyncio.to_thread(_convert_docx_to_markdown, tmp_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+        save_name = Path(file_name).stem + ".md"
+        dest = inbox_dir / save_name
+        if dest.exists():
+            dest = inbox_dir / f"{Path(file_name).stem}_{int(time.time())}.md"
+        dest.write_text(md_content, encoding="utf-8")
+    else:
+        # Save PDFs and text files directly
+        dest = inbox_dir / file_name
+        if dest.exists():
+            stem = Path(file_name).stem
+            dest = inbox_dir / f"{stem}_{int(time.time())}{ext}"
+        await tg_file.download_to_drive(dest)
+
+    # Build message for Claude Code — file context first, then user's instruction
+    rel_path = f"docs/inbox/{dest.name}"
+    caption = update.message.caption or ""
+    file_notice = (
+        f"A file has been saved to {rel_path} (absolute path: {dest}). "
+        "Read it with your Read tool."
+    )
+    if caption:
+        text_to_send = f"{file_notice}\n\n{caption}"
+    else:
+        text_to_send = file_notice
+
+    await update.message.chat.send_action(ChatAction.TYPING)
+    clear_status_msg_info(user.id, thread_id)
+
+    success, message = await session_manager.send_to_window(wid, text_to_send)
+    if not success:
+        await safe_reply(update.message, f"❌ {message}")
+        return
+
+    suffix_note = " (converted from Word to Markdown)" if is_docx else ""
+    await safe_reply(
+        update.message,
+        f"📄 File saved to `{rel_path}`{suffix_note} and sent to Claude Code.",
+    )
 
 
 # Active bash capture tasks: (user_id, thread_id) → asyncio.Task
@@ -1751,6 +1970,8 @@ def create_bot() -> Application:
     )
     # Photos: download and forward file path to Claude Code
     application.add_handler(MessageHandler(filters.PHOTO, photo_handler))
+    # Documents: save text/markdown files to session cwd and forward path
+    application.add_handler(MessageHandler(filters.Document.ALL, document_handler))
     # Catch-all: non-text content (stickers, voice, etc.)
     application.add_handler(
         MessageHandler(
