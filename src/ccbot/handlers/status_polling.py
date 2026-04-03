@@ -359,9 +359,7 @@ async def _check_memory_usage(bot: Bot) -> None:
             logger.debug("Memory check error for window %s: %s", wid, e)
 
 
-async def _find_highest_rss_window() -> (
-    tuple[str, int, int, float] | None
-):
+async def _find_highest_rss_window() -> tuple[str, int, int, float] | None:
     """Find the window with the highest process tree RSS.
 
     Returns (window_id, user_id, thread_id, rss_mb) or None.

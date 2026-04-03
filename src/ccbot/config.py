@@ -107,15 +107,11 @@ class Config:
 
         # System-wide memory pressure thresholds (MemAvailable from /proc/meminfo)
         # Escalation: warn → interrupt (send Escape) → kill (highest-RSS window)
-        self.mem_avail_warn_mb = float(
-            os.getenv("CCBOT_MEM_AVAIL_WARN_MB", "1024")
-        )
+        self.mem_avail_warn_mb = float(os.getenv("CCBOT_MEM_AVAIL_WARN_MB", "1024"))
         self.mem_avail_interrupt_mb = float(
             os.getenv("CCBOT_MEM_AVAIL_INTERRUPT_MB", "512")
         )
-        self.mem_avail_kill_mb = float(
-            os.getenv("CCBOT_MEM_AVAIL_KILL_MB", "256")
-        )
+        self.mem_avail_kill_mb = float(os.getenv("CCBOT_MEM_AVAIL_KILL_MB", "256"))
 
         # Scrub sensitive vars from os.environ so child processes never inherit them.
         # Values are already captured in Config attributes above.

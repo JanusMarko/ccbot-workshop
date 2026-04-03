@@ -58,9 +58,7 @@ def one_binding():
     """Set up one thread binding with a tracked PID."""
     status_polling._window_pids["@0"] = 1234
     with (
-        patch(
-            "ccbot.handlers.status_polling.session_manager"
-        ) as mock_sm,
+        patch("ccbot.handlers.status_polling.session_manager") as mock_sm,
         patch("ccbot.handlers.status_polling.tmux_manager") as mock_tmux,
         patch(
             "ccbot.handlers.status_polling.safe_send",
@@ -122,14 +120,17 @@ class TestCheckSystemMemory:
         self, mock_bot: AsyncMock, mock_config: MagicMock, one_binding: dict
     ) -> None:
         """Even with kill-level pressure, first cycle only warns."""
-        with patch(
-            "ccbot.handlers.status_polling.get_mem_available_mb",
-            new_callable=AsyncMock,
-            return_value=100.0,  # below kill threshold
-        ), patch(
-            "ccbot.handlers.status_polling.get_tree_rss_mb",
-            new_callable=AsyncMock,
-            return_value=3000.0,
+        with (
+            patch(
+                "ccbot.handlers.status_polling.get_mem_available_mb",
+                new_callable=AsyncMock,
+                return_value=100.0,  # below kill threshold
+            ),
+            patch(
+                "ccbot.handlers.status_polling.get_tree_rss_mb",
+                new_callable=AsyncMock,
+                return_value=3000.0,
+            ),
         ):
             await _check_system_memory(mock_bot)
         # Should only be at warn level, not kill
@@ -142,14 +143,17 @@ class TestCheckSystemMemory:
         self, mock_bot: AsyncMock, mock_config: MagicMock, one_binding: dict
     ) -> None:
         """Warn → interrupt on continued pressure."""
-        with patch(
-            "ccbot.handlers.status_polling.get_mem_available_mb",
-            new_callable=AsyncMock,
-            return_value=400.0,
-        ), patch(
-            "ccbot.handlers.status_polling.get_tree_rss_mb",
-            new_callable=AsyncMock,
-            return_value=3000.0,
+        with (
+            patch(
+                "ccbot.handlers.status_polling.get_mem_available_mb",
+                new_callable=AsyncMock,
+                return_value=400.0,
+            ),
+            patch(
+                "ccbot.handlers.status_polling.get_tree_rss_mb",
+                new_callable=AsyncMock,
+                return_value=3000.0,
+            ),
         ):
             # Cycle 1: warn
             await _check_system_memory(mock_bot)
@@ -168,14 +172,17 @@ class TestCheckSystemMemory:
         self, mock_bot: AsyncMock, mock_config: MagicMock, one_binding: dict
     ) -> None:
         """After interrupt, must wait cooldown cycles before kill."""
-        with patch(
-            "ccbot.handlers.status_polling.get_mem_available_mb",
-            new_callable=AsyncMock,
-            return_value=200.0,
-        ), patch(
-            "ccbot.handlers.status_polling.get_tree_rss_mb",
-            new_callable=AsyncMock,
-            return_value=3000.0,
+        with (
+            patch(
+                "ccbot.handlers.status_polling.get_mem_available_mb",
+                new_callable=AsyncMock,
+                return_value=200.0,
+            ),
+            patch(
+                "ccbot.handlers.status_polling.get_tree_rss_mb",
+                new_callable=AsyncMock,
+                return_value=3000.0,
+            ),
         ):
             # Cycle 1: warn
             await _check_system_memory(mock_bot)
@@ -206,14 +213,17 @@ class TestCheckSystemMemory:
         status_polling._sys_mem_level = 2
         status_polling._sys_mem_cycles_at_level = 10  # past cooldown
 
-        with patch(
-            "ccbot.handlers.status_polling.get_mem_available_mb",
-            new_callable=AsyncMock,
-            return_value=200.0,
-        ), patch(
-            "ccbot.handlers.status_polling.get_tree_rss_mb",
-            new_callable=AsyncMock,
-            return_value=3000.0,
+        with (
+            patch(
+                "ccbot.handlers.status_polling.get_mem_available_mb",
+                new_callable=AsyncMock,
+                return_value=200.0,
+            ),
+            patch(
+                "ccbot.handlers.status_polling.get_tree_rss_mb",
+                new_callable=AsyncMock,
+                return_value=3000.0,
+            ),
         ):
             await _check_system_memory(mock_bot)
 
@@ -292,9 +302,7 @@ class TestFindHighestRssWindow:
         rss_map = {100: 1500.0, 200: 3000.0}
 
         with (
-            patch(
-                "ccbot.handlers.status_polling.session_manager"
-            ) as mock_sm,
+            patch("ccbot.handlers.status_polling.session_manager") as mock_sm,
             patch(
                 "ccbot.handlers.status_polling.get_tree_rss_mb",
                 new_callable=AsyncMock,
@@ -315,9 +323,7 @@ class TestFindHighestRssWindow:
     @pytest.mark.asyncio
     async def test_returns_none_when_no_pids(self) -> None:
         status_polling._window_pids = {}
-        with patch(
-            "ccbot.handlers.status_polling.session_manager"
-        ) as mock_sm:
+        with patch("ccbot.handlers.status_polling.session_manager") as mock_sm:
             mock_sm.all_thread_bindings.return_value = [(1, 10, "@0")]
             result = await _find_highest_rss_window()
         assert result is None
