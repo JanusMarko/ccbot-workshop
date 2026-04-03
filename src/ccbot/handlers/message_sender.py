@@ -18,6 +18,7 @@ RetryAfter exceptions are re-raised so callers (queue worker) can handle them.
 
 import io
 import logging
+from pathlib import Path
 from typing import Any
 
 from telegram import Bot, InputMediaPhoto, LinkPreviewOptions, Message
@@ -124,6 +125,38 @@ async def send_photo(
         raise
     except Exception as e:
         logger.error("Failed to send photo to %d: %s", chat_id, e)
+
+
+async def send_document(
+    bot: Bot,
+    chat_id: int,
+    file_path: str,
+    **kwargs: Any,
+) -> None:
+    """Send a file as a Telegram document.
+
+    Args:
+        bot: Telegram Bot instance
+        chat_id: Target chat ID
+        file_path: Absolute path to the file to send
+        **kwargs: Extra kwargs passed to bot.send_document
+    """
+    path = Path(file_path)
+    if not path.exists():
+        logger.warning("Document file not found: %s", file_path)
+        return
+    try:
+        with open(path, "rb") as f:
+            await bot.send_document(
+                chat_id=chat_id,
+                document=f,
+                filename=path.name,
+                **kwargs,
+            )
+    except RetryAfter:
+        raise
+    except Exception as e:
+        logger.error("Failed to send document %s to %d: %s", path.name, chat_id, e)
 
 
 async def safe_reply(message: Message, text: str, **kwargs: Any) -> Message:

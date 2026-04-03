@@ -35,6 +35,7 @@ from ..tmux_manager import tmux_manager
 from .message_sender import (
     NO_LINK_PREVIEW,
     PARSE_MODE,
+    send_document,
     send_photo,
     send_with_fallback,
     strip_sentinels,
@@ -65,6 +66,7 @@ class MessageTask:
     content_type: str = "text"
     thread_id: int | None = None  # Telegram topic thread_id for targeted send
     image_data: list[tuple[str, bytes]] | None = None  # From tool_result images
+    document_path: str | None = None  # File path to send as Telegram document
     # callable task: a zero-argument coroutine factory executed in-order by the
     # worker.  Must be a factory (not a bare coroutine object) so the worker can
     # safely retry by calling it again — a coroutine can only be awaited once.
@@ -357,6 +359,23 @@ async def _send_task_images(bot: Bot, chat_id: int, task: MessageTask) -> None:
     )
 
 
+async def _send_task_document(bot: Bot, chat_id: int, task: MessageTask) -> None:
+    """Send document attached to a task, if any."""
+    if not task.document_path:
+        return
+    logger.info(
+        "Sending document %s in thread %s",
+        task.document_path,
+        task.thread_id,
+    )
+    await send_document(
+        bot,
+        chat_id,
+        task.document_path,
+        **_send_kwargs(task.thread_id),  # type: ignore[arg-type]
+    )
+
+
 async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> None:
     """Process a content message task."""
     wid = task.window_id or ""
@@ -381,6 +400,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                     link_preview_options=NO_LINK_PREVIEW,
                 )
                 await _send_task_images(bot, chat_id, task)
+                await _send_task_document(bot, chat_id, task)
                 await _check_and_send_status(bot, user_id, wid, task.thread_id)
                 return
             except RetryAfter:
@@ -396,6 +416,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                         link_preview_options=NO_LINK_PREVIEW,
                     )
                     await _send_task_images(bot, chat_id, task)
+                    await _send_task_document(bot, chat_id, task)
                     await _check_and_send_status(bot, user_id, wid, task.thread_id)
                     return
                 except RetryAfter:
@@ -441,7 +462,10 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     # 4. Send images if present (from tool_result with base64 image blocks)
     await _send_task_images(bot, chat_id, task)
 
-    # 5. After content, check and send status.
+    # 5. Send document if present (from Write tool with sendable file type)
+    await _send_task_document(bot, chat_id, task)
+
+    # 6. After content, check and send status.
     # Catch RetryAfter here: the status message is cosmetic and must never
     # propagate RetryAfter to the outer retry loop (which would re-send all
     # content messages as duplicates).
@@ -673,6 +697,7 @@ async def enqueue_content_message(
     text: str | None = None,
     thread_id: int | None = None,
     image_data: list[tuple[str, bytes]] | None = None,
+    document_path: str | None = None,
 ) -> None:
     """Enqueue a content message task."""
     logger.debug(
@@ -692,6 +717,7 @@ async def enqueue_content_message(
         content_type=content_type,
         thread_id=thread_id,
         image_data=image_data,
+        document_path=document_path,
     )
     queue.put_nowait(task)
 

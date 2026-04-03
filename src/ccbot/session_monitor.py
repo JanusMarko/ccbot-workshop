@@ -49,6 +49,7 @@ class NewMessage:
     role: str = "assistant"  # "user" or "assistant"
     tool_name: str | None = None  # For tool_use messages, the tool name
     image_data: list[tuple[str, bytes]] | None = None  # From tool_result images
+    document_path: str | None = None  # File path to send as Telegram document
 
 
 class SessionMonitor:
@@ -351,6 +352,7 @@ class SessionMonitor:
                             role=entry.role,
                             tool_name=entry.tool_name,
                             image_data=entry.image_data,
+                            document_path=entry.document_path,
                         )
                     )
 

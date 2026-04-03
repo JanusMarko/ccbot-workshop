@@ -17,6 +17,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,7 @@ class ParsedEntry:
     image_data: list[tuple[str, bytes]] | None = (
         None  # For tool_result entries with images: (media_type, raw_bytes)
     )
+    document_path: str | None = None  # For Write tool results: path to send as document
 
 
 @dataclass
@@ -57,6 +59,38 @@ class PendingToolInfo:
     summary: str  # Formatted tool summary (e.g. "**Read**(file.py)")
     tool_name: str  # Tool name (e.g. "Read", "Edit")
     input_data: Any = None  # Tool input parameters (for Edit to generate diff)
+
+
+# File extensions that should be auto-sent as Telegram documents when written
+SENDABLE_DOCUMENT_EXTENSIONS = frozenset(
+    {
+        # Documents & spreadsheets
+        ".pdf",
+        ".docx",
+        ".doc",
+        ".xlsx",
+        ".xls",
+        ".csv",
+        ".pptx",
+        ".ppt",
+        # Images (as document to preserve original quality)
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".svg",
+        ".webp",
+        ".bmp",
+        # Archives
+        ".zip",
+        ".tar",
+        ".gz",
+        ".tgz",
+        ".7z",
+        # Rich output
+        ".html",
+    }
+)
 
 
 class TranscriptParser:
@@ -549,7 +583,9 @@ class TranscriptParser:
                             # Store tool info for later tool_result formatting
                             # Edit tool needs input_data to generate diff in tool_result stage
                             input_data = (
-                                inp if name in ("Edit", "NotebookEdit") else None
+                                inp
+                                if name in ("Edit", "NotebookEdit", "Write")
+                                else None
                             )
                             pending_tools[tool_id] = PendingToolInfo(
                                 summary=summary,
@@ -714,6 +750,18 @@ class TranscriptParser:
                                 entry_text += "\n" + cls._format_tool_result_text(
                                     result_text, tool_name
                                 )
+                            # Check if Write tool produced a sendable document
+                            _doc_path: str | None = None
+                            if (
+                                tool_name == "Write"
+                                and tool_input_data
+                                and not is_error
+                            ):
+                                fp = tool_input_data.get("file_path", "")
+                                if fp:
+                                    ext = Path(fp).suffix.lower()
+                                    if ext in SENDABLE_DOCUMENT_EXTENSIONS:
+                                        _doc_path = fp
                             result.append(
                                 ParsedEntry(
                                     role="assistant",
@@ -722,6 +770,7 @@ class TranscriptParser:
                                     tool_use_id=_tuid,
                                     timestamp=entry_timestamp,
                                     image_data=result_images,
+                                    document_path=_doc_path,
                                 )
                             )
                         elif result_text or result_images:
