@@ -774,7 +774,8 @@ def create_app() -> FastAPI:
         inbox = Path(state.cwd) / "docs" / "inbox"
         inbox.mkdir(parents=True, exist_ok=True)
 
-        filename = file.filename or "unnamed"
+        # Strip directory components to prevent path traversal (e.g., ../../)
+        filename = Path(file.filename or "unnamed").name
         dest = inbox / filename
         if dest.exists():
             stem = Path(filename).stem
