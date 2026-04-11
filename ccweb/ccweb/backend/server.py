@@ -170,7 +170,14 @@ async def _handle_new_message(msg: NewMessage) -> None:
         # Check if this window's session matches the message's session
         # Use lookup (no auto-create) to avoid phantom state entries
         state = session_manager.lookup_window_state(window_id)
-        if not state or state.session_id != msg.session_id:
+        if not state:
+            logger.debug(
+                "No window_state for %s (client=%s), skipping message",
+                window_id,
+                client_id[:8],
+            )
+            continue
+        if state.session_id != msg.session_id:
             continue
 
         ws_msg = WsMessage(
@@ -325,7 +332,9 @@ async def _handle_ws_message(
             from .session import session_manager
 
             success, message = await session_manager.send_to_window(window_id, text)
-            if not success:
+            if success:
+                await ws.send_json({"type": "send_ack", "window_id": window_id})
+            else:
                 await ws.send_json(
                     WsError(code="send_failed", message=message).to_dict()
                 )
@@ -460,6 +469,9 @@ async def ws_endpoint(websocket: WebSocket) -> None:
     client_id = str(uuid.uuid4())
     _clients[client_id] = websocket
     logger.info("WebSocket connected: %s", client_id)
+
+    # Clear sent-grid tracking so reconnecting clients can see pending grids
+    _sent_grid_files.clear()
 
     try:
         # Send health check
