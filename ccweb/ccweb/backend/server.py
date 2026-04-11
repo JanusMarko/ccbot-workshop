@@ -257,6 +257,20 @@ async def _check_decision_grids(client_id: str, window_id: str, ws: WebSocket) -
     if not pending_dir.exists():
         return
 
+    # Stale file cleanup: move files older than 1 hour to failed/
+    import time as _time
+
+    stale_cutoff = _time.time() - 3600
+    for stale_file in pending_dir.glob("*.json"):
+        try:
+            if stale_file.stat().st_mtime < stale_cutoff:
+                failed_dir = pending_dir.parent / "failed"
+                failed_dir.mkdir(exist_ok=True)
+                stale_file.rename(failed_dir / stale_file.name)
+                logger.info("Moved stale grid file to failed/: %s", stale_file.name)
+        except (FileNotFoundError, OSError):
+            pass
+
     sent = _client_sent_grids.setdefault(client_id, set())
 
     for grid_file in pending_dir.glob("*.json"):
@@ -443,6 +457,9 @@ async def _handle_ws_message(
             )
             if success:
                 _client_bindings[client_id] = wid
+                # Auto-create .ccweb/pending/ for decision grid files
+                pending = Path(work_dir).expanduser().resolve() / ".ccweb" / "pending"
+                pending.mkdir(parents=True, exist_ok=True)
                 await _broadcast_sessions()
             else:
                 await ws.send_json(
@@ -638,6 +655,57 @@ def create_app() -> FastAPI:
     @app.get("/api/sessions")
     async def list_sessions() -> list[dict[str, Any]]:
         return await _build_session_list()
+
+    @app.post("/api/sessions")
+    async def create_session_rest(body: dict[str, Any]) -> dict[str, Any]:
+        """Create a new session (REST alternative to WebSocket create_session)."""
+        work_dir = body.get("work_dir", "")
+        name = body.get("name")
+        if not work_dir:
+            return {"error": "work_dir is required"}
+        success, message, wname, wid = await tmux_manager.create_window(
+            work_dir, window_name=name
+        )
+        if success:
+            # Auto-create .ccweb/pending/ in the session's cwd
+            pending_dir = Path(work_dir).expanduser().resolve() / ".ccweb" / "pending"
+            pending_dir.mkdir(parents=True, exist_ok=True)
+            await _broadcast_sessions()
+            return {"window_id": wid, "name": wname, "message": message}
+        return {"error": message}
+
+    @app.delete("/api/sessions/{window_id}")
+    async def delete_session_rest(window_id: str) -> dict[str, str]:
+        """Kill a session (REST alternative to WebSocket kill_session)."""
+        await tmux_manager.kill_window(window_id)
+        for cid, wid in list(_client_bindings.items()):
+            if wid == window_id:
+                del _client_bindings[cid]
+        await _broadcast_sessions()
+        return {"status": "ok"}
+
+    @app.post("/api/sessions/{window_id}/setup-ccweb")
+    async def setup_ccweb(window_id: str) -> dict[str, str]:
+        """Create .ccweb/instructions.md in the session's project."""
+        from .session import session_manager
+
+        state = session_manager.lookup_window_state(window_id)
+        if not state or not state.cwd:
+            return {"error": "Session not found or cwd unknown"}
+
+        ccweb_dir = Path(state.cwd) / ".ccweb"
+        ccweb_dir.mkdir(parents=True, exist_ok=True)
+        instructions_path = ccweb_dir / "instructions.md"
+        instructions_path.write_text(
+            "## CCWeb Integration\n"
+            "- When presenting multiple options/decisions to the user, "
+            "use /option-grid\n"
+            "- When reporting build/test/deploy status, use /status-report\n"
+            "- For interactive checklists, use /checklist\n"
+            "- For critical destructive actions, use /confirm before proceeding\n",
+            encoding="utf-8",
+        )
+        return {"path": str(instructions_path)}
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:

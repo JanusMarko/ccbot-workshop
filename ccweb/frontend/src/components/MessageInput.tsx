@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CommandItem } from "./CommandPalette";
 import { CommandPalette } from "./CommandPalette";
 
@@ -9,6 +9,7 @@ interface MessageInputProps {
   commands: CommandItem[];
   disabled?: boolean;
   children?: React.ReactNode; // Slot for FileUpload button
+  externalPaletteToggle?: boolean; // Toggled by parent (e.g., Ctrl+K)
 }
 
 export function MessageInput({
@@ -18,14 +19,23 @@ export function MessageInput({
   commands,
   disabled,
   children,
+  externalPaletteToggle,
 }: MessageInputProps) {
   const [text, setText] = useState("");
   const [showPalette, setShowPalette] = useState(false);
   const [slashFilter, setSlashFilter] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  // Command history
   const historyRef = useRef<string[]>([]);
   const historyIndexRef = useRef(-1);
+
+  // React to external palette toggle (e.g., Ctrl+K from parent)
+  useEffect(() => {
+    if (externalPaletteToggle !== undefined) {
+      setShowPalette((prev) => !prev);
+      setSlashFilter("");
+      textareaRef.current?.focus();
+    }
+  }, [externalPaletteToggle]);
 
   const handleSubmit = useCallback(() => {
     const trimmed = text.trim();

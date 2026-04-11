@@ -17,6 +17,26 @@ interface BrowseResult {
   error?: string;
 }
 
+const RECENT_DIRS_KEY = "ccweb_recent_dirs";
+const MAX_RECENT = 5;
+
+function getRecentDirs(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem(RECENT_DIRS_KEY) || "[]");
+  } catch {
+    return [];
+  }
+}
+
+function addRecentDir(path: string) {
+  const recent = getRecentDirs().filter((d) => d !== path);
+  recent.unshift(path);
+  localStorage.setItem(
+    RECENT_DIRS_KEY,
+    JSON.stringify(recent.slice(0, MAX_RECENT)),
+  );
+}
+
 export function DirectoryPicker({ onSelect, onCancel }: DirectoryPickerProps) {
   const [currentPath, setCurrentPath] = useState("");
   const [dirs, setDirs] = useState<DirEntry[]>([]);
@@ -25,6 +45,7 @@ export function DirectoryPicker({ onSelect, onCancel }: DirectoryPickerProps) {
   const [sessionName, setSessionName] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [recentDirs] = useState(getRecentDirs);
 
   const browse = useCallback(async (path: string) => {
     setLoading(true);
@@ -54,6 +75,7 @@ export function DirectoryPicker({ onSelect, onCancel }: DirectoryPickerProps) {
   const handleConfirm = () => {
     const path = pathInput.trim() || currentPath;
     if (!path) return;
+    addRecentDir(path);
     const parts = path.split("/");
     const name = sessionName.trim() || parts[parts.length - 1];
     onSelect(path, name);
@@ -154,6 +176,48 @@ export function DirectoryPicker({ onSelect, onCancel }: DirectoryPickerProps) {
             }}
           />
         </div>
+
+        {/* Recent directories */}
+        {recentDirs.length > 0 && !loading && (
+          <div
+            style={{
+              padding: "8px 20px",
+              borderBottom: "1px solid var(--border)",
+            }}
+          >
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--text-muted)",
+                fontWeight: 600,
+                textTransform: "uppercase",
+                marginBottom: 4,
+              }}
+            >
+              Recent
+            </div>
+            {recentDirs.map((d) => (
+              <div
+                key={d}
+                onClick={() => {
+                  setPathInput(d);
+                  browse(d);
+                }}
+                style={{
+                  padding: "4px 0",
+                  cursor: "pointer",
+                  fontSize: 13,
+                  color: "var(--accent)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {d}
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Directory list */}
         <div style={{ flex: 1, overflowY: "auto", minHeight: 200 }}>

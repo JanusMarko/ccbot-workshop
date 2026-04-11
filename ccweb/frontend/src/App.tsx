@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { filterMessages, useSession } from "./hooks/useSession";
 import { SessionSidebar } from "./components/SessionSidebar";
@@ -151,19 +151,51 @@ function App() {
     }
   }, [activeWindowId]);
 
+  // Ctrl+K toggle counter — changes trigger the palette toggle in MessageInput
+  const [paletteToggle, setPaletteToggle] = useState<boolean | undefined>(
+    undefined,
+  );
+
   // Global keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      // Ctrl+K: toggle command palette (handled by MessageInput focus)
-      // Ctrl+N: new session
       if (e.key === "n" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         setShowDirectoryPicker(true);
+      }
+      if (e.key === "k" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        setPaletteToggle((prev) => (prev === undefined ? true : !prev));
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
+
+  // Swipe gestures for sidebar drawer on tablet
+  const touchStartX = useRef(0);
+  useEffect(() => {
+    if (!isTablet) return;
+    const handleTouchStart = (e: TouchEvent) => {
+      touchStartX.current = e.touches[0].clientX;
+    };
+    const handleTouchEnd = (e: TouchEvent) => {
+      const dx = e.changedTouches[0].clientX - touchStartX.current;
+      if (dx > 80 && touchStartX.current < 40) {
+        // Swipe right from left edge → open
+        setSidebarOpen(true);
+      } else if (dx < -80) {
+        // Swipe left → close
+        setSidebarOpen(false);
+      }
+    };
+    window.addEventListener("touchstart", handleTouchStart, { passive: true });
+    window.addEventListener("touchend", handleTouchEnd, { passive: true });
+    return () => {
+      window.removeEventListener("touchstart", handleTouchStart);
+      window.removeEventListener("touchend", handleTouchEnd);
+    };
+  }, [isTablet]);
 
   const filteredMessages = filterMessages(messages, filter);
 
@@ -284,6 +316,7 @@ function App() {
               onScreenshot={handleScreenshot}
               commands={allCommands}
               disabled={status !== "connected"}
+              externalPaletteToggle={paletteToggle}
             >
               <FileUpload
                 windowId={activeWindowId}

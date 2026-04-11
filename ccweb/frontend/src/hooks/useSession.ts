@@ -67,7 +67,24 @@ function wsMessageToDisplay(msg: WsMessage): DisplayMessage {
 
 export function useSession(): UseSessionReturn {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
-  const [activeWindowId, setActiveWindowId] = useState<string | null>(null);
+  const [activeWindowId, setActiveWindowIdState] = useState<string | null>(
+    () => {
+      try {
+        return localStorage.getItem("ccweb_last_session");
+      } catch {
+        return null;
+      }
+    },
+  );
+  const setActiveWindowId = useCallback((id: string | null) => {
+    setActiveWindowIdState(id);
+    try {
+      if (id) localStorage.setItem("ccweb_last_session", id);
+      else localStorage.removeItem("ccweb_last_session");
+    } catch {
+      // localStorage unavailable
+    }
+  }, []);
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [statusText, setStatusText] = useState("");
   const [health, setHealth] = useState<WsHealth | null>(null);
@@ -77,7 +94,21 @@ export function useSession(): UseSessionReturn {
   const [decisionGrid, setDecisionGrid] = useState<WsDecisionGrid | null>(
     null,
   );
-  const [filter, setFilter] = useState<MessageFilter>("all");
+  const [filter, setFilterState] = useState<MessageFilter>(() => {
+    try {
+      return (localStorage.getItem("ccweb_filter") as MessageFilter) || "all";
+    } catch {
+      return "all";
+    }
+  });
+  const setFilter = useCallback((f: MessageFilter) => {
+    setFilterState(f);
+    try {
+      localStorage.setItem("ccweb_filter", f);
+    } catch {
+      // localStorage unavailable
+    }
+  }, []);
 
   // Use a ref to avoid stale closures in the message handler.
   // The handler is called synchronously from the WebSocket onmessage,
