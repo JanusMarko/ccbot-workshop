@@ -743,8 +743,13 @@ def create_app() -> FastAPI:
     @app.get("/api/browse")
     async def browse_directory(path: str = "") -> dict[str, Any]:
         """Browse directories for session creation."""
-        browse_path = path or config.browse_root or str(Path.home())
+        root = Path(config.browse_root or str(Path.home())).resolve()
+        browse_path = path or str(root)
         target = Path(browse_path).expanduser().resolve()
+
+        # Containment: prevent browsing outside the root
+        if not target.is_relative_to(root):
+            return {"path": str(root), "dirs": [], "error": "Outside browse root"}
         if not target.is_dir():
             return {"path": str(target), "dirs": [], "error": "Not a directory"}
 
@@ -759,7 +764,8 @@ def create_app() -> FastAPI:
         except PermissionError:
             return {"path": str(target), "dirs": [], "error": "Permission denied"}
 
-        parent = str(target.parent) if target != target.parent else None
+        # Only show parent if it's still within the browse root
+        parent = str(target.parent) if target != root else None
         return {"path": str(target), "parent": parent, "dirs": dirs}
 
     @app.post("/api/sessions/{window_id}/upload")

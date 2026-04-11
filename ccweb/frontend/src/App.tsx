@@ -43,10 +43,15 @@ function App() {
   const [wikiPath, setWikiPath] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  // On connect/reconnect: re-send switch_session for restored/active session
-  // so the server knows which session to stream messages for
+  // On connect/reconnect: re-send switch_session for the active session
+  // so the server knows which session to stream messages for.
+  // Only fires when status transitions TO "connected" (not on activeWindowId change,
+  // which is handled by handleSelectSession).
+  const prevStatusRef = useRef(status);
   useEffect(() => {
-    if (status === "connected" && activeWindowId) {
+    const wasDisconnected = prevStatusRef.current !== "connected";
+    prevStatusRef.current = status;
+    if (status === "connected" && wasDisconnected && activeWindowId) {
       send({ type: "switch_session", window_id: activeWindowId });
     }
   }, [status, activeWindowId, send]);

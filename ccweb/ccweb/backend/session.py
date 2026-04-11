@@ -207,10 +207,14 @@ class SessionManager:
                     self.window_display_names[window_id] = new_wname
                     changed = True
 
-        stale_wids = [w for w in self.window_states if w and w not in valid_wids]
-        for wid in stale_wids:
-            del self.window_states[wid]
-            changed = True
+        # Only clean up stale entries when we actually found valid entries.
+        # If valid_wids is empty (e.g., session_map is mid-write or has no
+        # entries for our tmux session), skip cleanup to avoid wiping all state.
+        if valid_wids:
+            stale_wids = [w for w in self.window_states if w and w not in valid_wids]
+            for wid in stale_wids:
+                del self.window_states[wid]
+                changed = True
 
         if changed:
             self._save_state()
