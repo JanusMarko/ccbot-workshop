@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { WsDecisionGrid, ClientSubmitDecisions } from "../protocol";
 
 interface DecisionGridProps {
@@ -12,14 +12,21 @@ interface RowState {
   notes: string;
 }
 
+function initRows(grid: WsDecisionGrid): RowState[] {
+  return grid.grid.items.map((item) => {
+    const recommended = item.options.find((o) => o.recommended);
+    return { choice: recommended?.label ?? null, notes: "" };
+  });
+}
+
 export function DecisionGrid({ grid, onSubmit, onDismiss }: DecisionGridProps) {
   const data = grid.grid;
-  const [rows, setRows] = useState<RowState[]>(
-    data.items.map((item) => {
-      const recommended = item.options.find((o) => o.recommended);
-      return { choice: recommended?.label ?? null, notes: "" };
-    }),
-  );
+  const [rows, setRows] = useState<RowState[]>(() => initRows(grid));
+
+  // Reset rows when the grid changes (e.g., new grid arrives)
+  useEffect(() => {
+    setRows(initRows(grid));
+  }, [grid]);
 
   const updateRow = (index: number, update: Partial<RowState>) => {
     setRows((prev) =>

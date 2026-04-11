@@ -260,8 +260,16 @@ class SessionMonitor:
 
                 session.last_byte_offset = safe_offset
 
-        except OSError as e:
+        except (OSError, UnicodeDecodeError) as e:
             logger.error("Error reading session file %s: %s", file_path, e)
+            # On UnicodeDecodeError (corrupted offset mid-character), reset
+            # offset to 0 so the next cycle can recover.
+            if isinstance(e, UnicodeDecodeError):
+                logger.warning(
+                    "Resetting byte offset for session %s due to decode error",
+                    session.session_id,
+                )
+                session.last_byte_offset = 0
         return new_entries
 
     async def check_for_updates(self, active_session_ids: set[str]) -> list[NewMessage]:

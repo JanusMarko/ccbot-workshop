@@ -34,6 +34,7 @@ interface UseSessionReturn {
   handleServerMessage: (msg: ServerMessage) => void;
   setActiveWindowId: (id: string | null) => void;
   clearDecisionGrid: () => void;
+  clearSessionState: () => void;
 }
 
 let msgCounter = 0;
@@ -150,6 +151,14 @@ export function useSession(): UseSessionReturn {
     setDecisionGrid(null);
   }, []);
 
+  // Clear ephemeral state when switching sessions to prevent stale UI
+  const clearSessionState = useCallback(() => {
+    setMessages([]);
+    setStatusText("");
+    setInteractiveUI(null);
+    setDecisionGrid(null);
+  }, []);
+
   return {
     sessions,
     activeWindowId,
@@ -163,6 +172,7 @@ export function useSession(): UseSessionReturn {
     handleServerMessage,
     setActiveWindowId,
     clearDecisionGrid,
+    clearSessionState,
   };
 }
 

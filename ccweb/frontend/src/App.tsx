@@ -24,16 +24,18 @@ function App() {
     handleServerMessage,
     setActiveWindowId,
     clearDecisionGrid,
+    clearSessionState,
   } = useSession();
 
   const { status, send } = useWebSocket(handleServerMessage);
 
   const handleSelectSession = useCallback(
     (windowId: string) => {
+      clearSessionState(); // Clear stale messages/UI before switching
       setActiveWindowId(windowId);
       send({ type: "switch_session", window_id: windowId });
     },
-    [send, setActiveWindowId],
+    [send, setActiveWindowId, clearSessionState],
   );
 
   const handleCreateSession = useCallback(

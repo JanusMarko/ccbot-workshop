@@ -242,8 +242,8 @@ class SessionManager:
 
     async def resolve_session_for_window(self, window_id: str) -> ClaudeSession | None:
         """Resolve a tmux window to the best matching Claude session."""
-        state = self.get_window_state(window_id)
-        if not state.session_id or not state.cwd:
+        state = self.lookup_window_state(window_id)
+        if not state or not state.session_id or not state.cwd:
             return None
 
         file_path = self._build_session_file_path(state.session_id, state.cwd)

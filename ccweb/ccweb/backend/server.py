@@ -199,11 +199,14 @@ async def _handle_new_message(msg: NewMessage) -> None:
 
 # ── Status polling ───────────────────────────────────────────────────────
 
-# Track grid files already sent to frontend (avoid re-sending)
-_sent_grid_files: set[str] = set()
+# Per-client tracking of sent grid files (client_id → set of file paths)
+_client_sent_grids: dict[str, set[str]] = {}
+
+# Dedup: last interactive UI content sent per (client_id, window_id)
+_last_interactive_content: dict[tuple[str, str], str] = {}
 
 
-async def _check_decision_grids(window_id: str, ws: WebSocket) -> None:
+async def _check_decision_grids(client_id: str, window_id: str, ws: WebSocket) -> None:
     """Check for new decision grid files in .ccweb/pending/ for a window."""
     from .session import session_manager
 
@@ -215,31 +218,35 @@ async def _check_decision_grids(window_id: str, ws: WebSocket) -> None:
     if not pending_dir.exists():
         return
 
+    sent = _client_sent_grids.setdefault(client_id, set())
+
     for grid_file in pending_dir.glob("*.json"):
         file_key = str(grid_file)
-        if file_key in _sent_grid_files:
+        if file_key in sent:
             continue
 
         try:
             grid_data = json.loads(grid_file.read_text())
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Invalid grid file %s: %s", grid_file, e)
-            # Move to failed/
             failed_dir = pending_dir.parent / "failed"
             failed_dir.mkdir(exist_ok=True)
             grid_file.rename(failed_dir / grid_file.name)
             continue
 
-        _sent_grid_files.add(file_key)
+        sent.add(file_key)
         grid_msg = WsDecisionGrid(
             window_id=window_id,
             grid=grid_data,
         )
         try:
             await ws.send_json(grid_msg.to_dict())
-            logger.info("Sent decision grid to client: %s", grid_file.name)
-        except Exception:
-            _sent_grid_files.discard(file_key)
+            logger.info(
+                "Sent decision grid to client %s: %s", client_id[:8], grid_file.name
+            )
+        except Exception as e:
+            logger.debug("WebSocket send failed: %s", e)
+            sent.discard(file_key)
 
 
 async def _status_poll_loop() -> None:
@@ -256,16 +263,21 @@ async def _status_poll_loop() -> None:
                     continue
 
                 # Check for decision grid files
-                await _check_decision_grids(window_id, ws)
+                await _check_decision_grids(client_id, window_id, ws)
 
                 pane_text = await tmux_manager.capture_pane(w.window_id)
                 if not pane_text:
                     continue
 
-                # Check for interactive UI
+                # Check for interactive UI (with dedup)
                 if is_interactive_ui(pane_text):
                     content = extract_interactive_content(pane_text)
                     if content:
+                        dedup_key = (client_id, window_id)
+                        if _last_interactive_content.get(dedup_key) == content.content:
+                            continue  # Same UI, don't re-send
+                        _last_interactive_content[dedup_key] = content.content
+
                         parsed = parse_interactive_ui(content.content, content.name)
                         ui_msg = WsInteractiveUI(
                             window_id=window_id,
@@ -275,9 +287,12 @@ async def _status_poll_loop() -> None:
                         )
                         try:
                             await ws.send_json(ui_msg.to_dict())
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug("WebSocket send failed: %s", e)
                         continue
+                else:
+                    # No interactive UI — clear dedup cache
+                    _last_interactive_content.pop((client_id, window_id), None)
 
                 # Check for status line
                 status_text = parse_status_line(pane_text)
@@ -454,8 +469,11 @@ async def _handle_ws_message(
                     completed_dir = Path(state.cwd) / ".ccweb" / "completed"
                     completed_dir.mkdir(parents=True, exist_ok=True)
                     for f in pending_dir.glob("*.json"):
+                        file_key = str(f)
                         f.rename(completed_dir / f.name)
-                        _sent_grid_files.discard(str(f))
+                        # Clear from all clients' sent tracking
+                        for sent_set in _client_sent_grids.values():
+                            sent_set.discard(file_key)
         return
 
     logger.warning("Unknown WebSocket message type: %s", msg_type)
@@ -468,8 +486,8 @@ async def ws_endpoint(websocket: WebSocket) -> None:
     _clients[client_id] = websocket
     logger.info("WebSocket connected: %s", client_id)
 
-    # Clear sent-grid tracking so reconnecting clients can see pending grids
-    _sent_grid_files.clear()
+    # New client gets fresh grid tracking (will receive any pending grids)
+    _client_sent_grids[client_id] = set()
 
     try:
         # Send health check
@@ -500,6 +518,11 @@ async def ws_endpoint(websocket: WebSocket) -> None:
     finally:
         _clients.pop(client_id, None)
         _client_bindings.pop(client_id, None)
+        _client_sent_grids.pop(client_id, None)
+        # Clear interactive UI dedup for this client
+        for key in list(_last_interactive_content):
+            if key[0] == client_id:
+                del _last_interactive_content[key]
 
 
 # ── App lifecycle ────────────────────────────────────────────────────────
@@ -552,7 +575,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Clear module-level state
     _clients.clear()
     _client_bindings.clear()
-    _sent_grid_files.clear()
+    _client_sent_grids.clear()
+    _last_interactive_content.clear()
     logger.info("CCWeb stopped")
 
 
