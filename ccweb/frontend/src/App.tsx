@@ -150,6 +150,7 @@ function App() {
       {/* Decision grid overlay */}
       {decisionGrid && (
         <DecisionGrid
+          key={decisionGrid.grid.id}
           grid={decisionGrid}
           onSubmit={handleSubmitDecisions}
           onDismiss={clearDecisionGrid}

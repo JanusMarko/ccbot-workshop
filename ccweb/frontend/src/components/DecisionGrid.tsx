@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { WsDecisionGrid, ClientSubmitDecisions } from "../protocol";
 
 interface DecisionGridProps {
@@ -21,12 +21,9 @@ function initRows(grid: WsDecisionGrid): RowState[] {
 
 export function DecisionGrid({ grid, onSubmit, onDismiss }: DecisionGridProps) {
   const data = grid.grid;
+  // Component is keyed by grid.id in App.tsx, so it remounts on new grids.
+  // No useEffect needed for resetting state.
   const [rows, setRows] = useState<RowState[]>(() => initRows(grid));
-
-  // Reset rows when the grid changes (e.g., new grid arrives)
-  useEffect(() => {
-    setRows(initRows(grid));
-  }, [grid]);
 
   const updateRow = (index: number, update: Partial<RowState>) => {
     setRows((prev) =>
