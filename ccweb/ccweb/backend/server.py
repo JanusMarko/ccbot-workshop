@@ -490,7 +490,10 @@ async def _handle_ws_message(
                     completed_dir.mkdir(parents=True, exist_ok=True)
                     for f in pending_dir.glob("*.json"):
                         file_key = str(f)
-                        f.rename(completed_dir / f.name)
+                        try:
+                            f.rename(completed_dir / f.name)
+                        except FileNotFoundError:
+                            pass  # Already moved by poll loop or another client
                         # Clear from all clients' sent tracking
                         for sent_set in _client_sent_grids.values():
                             sent_set.discard(file_key)
