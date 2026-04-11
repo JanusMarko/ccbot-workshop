@@ -8,6 +8,7 @@ interface SessionSidebarProps {
   onSelectSession: (windowId: string) => void;
   onCreateSession: () => void;
   onKillSession: (windowId: string) => void;
+  onOpenWiki?: () => void;
 }
 
 function HealthBanner({ health }: { health: WsHealth }) {
@@ -44,6 +45,7 @@ export function SessionSidebar({
   onSelectSession,
   onCreateSession,
   onKillSession,
+  onOpenWiki,
 }: SessionSidebarProps) {
   return (
     <div
@@ -174,6 +176,33 @@ export function SessionSidebar({
           ))
         )}
       </div>
+
+      {/* Wiki link */}
+      {onOpenWiki && (
+        <div
+          style={{
+            padding: "8px 12px",
+            borderTop: "1px solid var(--border)",
+          }}
+        >
+          <button
+            onClick={onOpenWiki}
+            style={{
+              width: "100%",
+              padding: "6px 10px",
+              background: "var(--bg-surface)",
+              color: "var(--text-secondary)",
+              border: "1px solid var(--border)",
+              borderRadius: 4,
+              cursor: "pointer",
+              fontSize: 12,
+              fontFamily: "inherit",
+            }}
+          >
+            Wiki / Help
+          </button>
+        </div>
+      )}
     </div>
   );
 }

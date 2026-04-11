@@ -60,6 +60,30 @@ from .ws_protocol import (
 
 logger = logging.getLogger(__name__)
 
+
+def _parse_frontmatter(path: Path) -> dict[str, Any]:
+    """Parse YAML frontmatter from a markdown file (simple key: value parser)."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    if not text.startswith("---"):
+        return {}
+    end = text.find("---", 3)
+    if end == -1:
+        return {}
+    fm: dict[str, Any] = {}
+    for line in text[3:end].strip().splitlines():
+        if ":" in line:
+            key, _, val = line.partition(":")
+            val = val.strip().strip('"').strip("'")
+            if val.isdigit():
+                fm[key.strip()] = int(val)
+            else:
+                fm[key.strip()] = val
+    return fm
+
+
 # ── Connected clients ────────────────────────────────────────────────────
 
 # client_id → WebSocket
@@ -714,6 +738,84 @@ def create_app() -> FastAPI:
         if not pane_text:
             return Response(content="Failed to capture pane", status_code=500)
         return Response(content=pane_text, media_type="text/plain")
+
+    # ── Documentation wiki endpoints ─────────────────────────────────────
+
+    docs_dir = Path(__file__).parent.parent.parent / "docs"
+
+    @app.get("/api/docs")
+    async def get_doc_tree() -> list[dict[str, Any]]:
+        """Return the documentation tree structure with frontmatter."""
+        if not docs_dir.exists():
+            return []
+
+        tree: list[dict[str, Any]] = []
+        for md_file in sorted(docs_dir.rglob("*.md")):
+            rel = md_file.relative_to(docs_dir)
+            frontmatter = _parse_frontmatter(md_file)
+            tree.append(
+                {
+                    "path": str(rel),
+                    "title": frontmatter.get(
+                        "title", rel.stem.replace("-", " ").title()
+                    ),
+                    "description": frontmatter.get("description", ""),
+                    "order": frontmatter.get("order", 99),
+                    "section": str(rel.parent) if str(rel.parent) != "." else "",
+                }
+            )
+        # Sort by section then order
+        tree.sort(key=lambda x: (x["section"], x["order"], x["title"]))
+        return tree
+
+    @app.get("/api/docs/{path:path}")
+    async def get_doc_content(path: str) -> Response:
+        """Return raw markdown content for a doc file."""
+        target = (docs_dir / path).resolve()
+        # Prevent path traversal
+        if not str(target).startswith(str(docs_dir.resolve())):
+            return Response(content="Forbidden", status_code=403)
+        if not target.exists() or not target.is_file():
+            return Response(content="Not found", status_code=404)
+        content = target.read_text(encoding="utf-8")
+        # Strip frontmatter before returning
+        if content.startswith("---"):
+            end = content.find("---", 3)
+            if end != -1:
+                content = content[end + 3 :].lstrip("\n")
+        return Response(content=content, media_type="text/markdown; charset=utf-8")
+
+    @app.get("/api/docs-search")
+    async def search_docs(q: str = "") -> list[dict[str, Any]]:
+        """Full-text search across all doc files."""
+        if not q or not docs_dir.exists():
+            return []
+        query = q.lower()
+        results: list[dict[str, Any]] = []
+        for md_file in docs_dir.rglob("*.md"):
+            try:
+                text = md_file.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if query in text.lower():
+                rel = str(md_file.relative_to(docs_dir))
+                frontmatter = _parse_frontmatter(md_file)
+                # Find a snippet around the match
+                idx = text.lower().find(query)
+                start = max(0, idx - 60)
+                end = min(len(text), idx + len(query) + 60)
+                snippet = text[start:end].replace("\n", " ").strip()
+                results.append(
+                    {
+                        "path": rel,
+                        "title": frontmatter.get(
+                            "title",
+                            md_file.stem.replace("-", " ").title(),
+                        ),
+                        "snippet": f"...{snippet}...",
+                    }
+                )
+        return results
 
     # Serve static frontend files (production)
     # __file__ is ccweb/ccweb/backend/server.py → .parent.parent.parent = ccweb/

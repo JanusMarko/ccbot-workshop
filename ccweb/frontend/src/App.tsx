@@ -10,6 +10,8 @@ import { DecisionGrid } from "./components/DecisionGrid";
 import { FilterBar } from "./components/FilterBar";
 import { FileUpload } from "./components/FileUpload";
 import { DirectoryPicker } from "./components/DirectoryPicker";
+import { WikiSidebar } from "./components/WikiSidebar";
+import { WikiPage } from "./components/WikiPage";
 import {
   BUILTIN_COMMANDS,
   type CommandItem,
@@ -36,6 +38,7 @@ function App() {
   const { status, send } = useWebSocket(handleServerMessage);
 
   const [showDirectoryPicker, setShowDirectoryPicker] = useState(false);
+  const [wikiPath, setWikiPath] = useState<string | null>(null);
 
   // Fetch project skills when active session changes
   const [projectCommands, setProjectCommands] = useState<CommandItem[]>([]);
@@ -169,17 +172,26 @@ function App() {
         overflow: "hidden",
       }}
     >
-      {/* Sidebar */}
-      <SessionSidebar
-        sessions={sessions}
-        activeWindowId={activeWindowId}
-        health={health}
-        onSelectSession={handleSelectSession}
-        onCreateSession={() => setShowDirectoryPicker(true)}
-        onKillSession={handleKillSession}
-      />
+      {/* Sidebar — wiki or sessions */}
+      {wikiPath !== null ? (
+        <WikiSidebar
+          activePath={wikiPath}
+          onNavigate={setWikiPath}
+          onClose={() => setWikiPath(null)}
+        />
+      ) : (
+        <SessionSidebar
+          sessions={sessions}
+          activeWindowId={activeWindowId}
+          health={health}
+          onSelectSession={handleSelectSession}
+          onCreateSession={() => setShowDirectoryPicker(true)}
+          onKillSession={handleKillSession}
+          onOpenWiki={() => setWikiPath("index.md")}
+        />
+      )}
 
-      {/* Main content */}
+      {/* Main content — wiki or session */}
       <div
         style={{
           flex: 1,
@@ -188,7 +200,9 @@ function App() {
           minWidth: 0,
         }}
       >
-        {activeWindowId ? (
+        {wikiPath !== null ? (
+          <WikiPage path={wikiPath} onNavigate={setWikiPath} />
+        ) : activeWindowId ? (
           <>
             <FilterBar filter={filter} onFilterChange={setFilter} />
             <MessageStream messages={filteredMessages} />
