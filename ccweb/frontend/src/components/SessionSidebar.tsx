@@ -1,3 +1,4 @@
+import { useCallback, useState } from "react";
 import type { SessionInfo } from "../protocol";
 import type { WsHealth } from "../protocol";
 
@@ -8,6 +9,7 @@ interface SessionSidebarProps {
   onSelectSession: (windowId: string) => void;
   onCreateSession: () => void;
   onKillSession: (windowId: string) => void;
+  onRenameSession?: (windowId: string, newName: string) => void;
   onOpenWiki?: () => void;
 }
 
@@ -45,8 +47,23 @@ export function SessionSidebar({
   onSelectSession,
   onCreateSession,
   onKillSession,
+  onRenameSession,
   onOpenWiki,
 }: SessionSidebarProps) {
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+
+  const handleRenameSubmit = useCallback(
+    (windowId: string) => {
+      const trimmed = renameValue.trim();
+      if (trimmed && onRenameSession) {
+        onRenameSession(windowId, trimmed);
+      }
+      setRenamingId(null);
+    },
+    [renameValue, onRenameSession],
+  );
+
   return (
     <div
       style={{
@@ -129,17 +146,49 @@ export function SessionSidebar({
               }}
             >
               <div style={{ minWidth: 0 }}>
-                <div
-                  style={{
-                    fontWeight: 600,
-                    fontSize: 13,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {s.name}
-                </div>
+                {renamingId === s.window_id ? (
+                  <input
+                    type="text"
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleRenameSubmit(s.window_id);
+                      if (e.key === "Escape") setRenamingId(null);
+                    }}
+                    onBlur={() => handleRenameSubmit(s.window_id)}
+                    autoFocus
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      width: "100%",
+                      padding: "2px 4px",
+                      background: "var(--bg-primary)",
+                      color: "var(--text-primary)",
+                      border: "1px solid var(--accent)",
+                      borderRadius: 3,
+                      fontSize: 13,
+                      fontWeight: 600,
+                      fontFamily: "inherit",
+                      outline: "none",
+                    }}
+                  />
+                ) : (
+                  <div
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      setRenamingId(s.window_id);
+                      setRenameValue(s.name);
+                    }}
+                    style={{
+                      fontWeight: 600,
+                      fontSize: 13,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {s.name}
+                  </div>
+                )}
                 <div
                   style={{
                     fontSize: 11,

@@ -73,6 +73,7 @@ class WsStatus:
     type: str = "status"
     window_id: str = ""
     text: str = ""
+    context_pct: int | None = None  # Context usage % from status bar chrome
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

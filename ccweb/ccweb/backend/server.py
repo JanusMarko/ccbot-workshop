@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -59,6 +60,18 @@ from .ws_protocol import (
 )
 
 logger = logging.getLogger(__name__)
+
+_RE_CONTEXT_PCT = re.compile(r"Context:\s*(\d+)%")
+
+
+def _extract_context_pct(pane_text: str) -> int | None:
+    """Extract context usage percentage from Claude Code's status bar chrome."""
+    # The bottom of the pane shows something like: [Opus 4.6] Context: 34%
+    for line in reversed(pane_text.splitlines()):
+        m = _RE_CONTEXT_PCT.search(line)
+        if m:
+            return int(m.group(1))
+    return None
 
 
 def _parse_frontmatter(path: Path) -> dict[str, Any]:
@@ -350,17 +363,19 @@ async def _status_poll_loop() -> None:
                     # No interactive UI — clear dedup cache
                     _last_interactive_content.pop((client_id, window_id), None)
 
-                # Check for status line
+                # Check for status line + context %
                 status_text = parse_status_line(pane_text)
-                if status_text:
+                context_pct = _extract_context_pct(pane_text)
+                if status_text or context_pct is not None:
                     status_msg = WsStatus(
                         window_id=window_id,
-                        text=status_text,
+                        text=status_text or "",
+                        context_pct=context_pct,
                     )
                     try:
                         await ws.send_json(status_msg.to_dict())
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("WebSocket send failed: %s", e)
 
         except Exception as e:
             logger.error("Status poll error: %s", e)
@@ -706,6 +721,80 @@ def create_app() -> FastAPI:
             encoding="utf-8",
         )
         return {"path": str(instructions_path)}
+
+    @app.put("/api/sessions/{window_id}/rename")
+    async def rename_session(window_id: str, body: dict[str, Any]) -> dict[str, str]:
+        """Rename a tmux window (display name)."""
+        from .session import session_manager
+
+        new_name = body.get("name", "").strip()
+        if not new_name:
+            return {"error": "name is required"}
+        success = await tmux_manager.rename_window(window_id, new_name)
+        if success:
+            session_manager.window_display_names[window_id] = new_name
+            ws = session_manager.lookup_window_state(window_id)
+            if ws:
+                ws.window_name = new_name
+            session_manager._save_state()
+            await _broadcast_sessions()
+            return {"status": "ok", "name": new_name}
+        return {"error": "Failed to rename window"}
+
+    @app.get("/api/sessions/{window_id}/export")
+    async def export_session(window_id: str, fmt: str = "markdown") -> Response:
+        """Export conversation as Markdown, JSON, or plain text."""
+        from .session import session_manager
+
+        messages, total = await session_manager.get_recent_messages(window_id)
+        if not messages:
+            return Response(content="No messages", status_code=404)
+
+        display = session_manager.get_display_name(window_id)
+
+        if fmt == "json":
+            import json as _json
+
+            content = _json.dumps(messages, indent=2)
+            return Response(
+                content=content,
+                media_type="application/json",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{display}.json"'
+                },
+            )
+
+        # Markdown or plain text
+        lines: list[str] = [f"# {display}\n"]
+        for msg in messages:
+            role = msg.get("role", "assistant")
+            text = msg.get("text", "")
+            ct = msg.get("content_type", "text")
+            if role == "user":
+                lines.append(f"## You\n\n{text}\n")
+            elif ct == "thinking":
+                lines.append(
+                    f"<details><summary>Thinking</summary>\n\n{text}\n\n</details>\n"
+                )
+            elif ct in ("tool_use", "tool_result"):
+                lines.append(f"```\n{text}\n```\n")
+            else:
+                lines.append(f"{text}\n")
+
+        content = "\n".join(lines)
+        if fmt == "plain":
+            return Response(
+                content=content,
+                media_type="text/plain",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{display}.txt"'
+                },
+            )
+        return Response(
+            content=content,
+            media_type="text/markdown",
+            headers={"Content-Disposition": f'attachment; filename="{display}.md"'},
+        )
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:

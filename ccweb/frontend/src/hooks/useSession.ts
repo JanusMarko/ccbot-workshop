@@ -27,6 +27,7 @@ interface UseSessionReturn {
   activeWindowId: string | null;
   messages: DisplayMessage[];
   statusText: string;
+  contextPct: number | null;
   health: WsHealth | null;
   interactiveUI: WsInteractiveUI | null;
   decisionGrid: WsDecisionGrid | null;
@@ -87,6 +88,7 @@ export function useSession(): UseSessionReturn {
   }, []);
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [statusText, setStatusText] = useState("");
+  const [contextPct, setContextPct] = useState<number | null>(null);
   const [health, setHealth] = useState<WsHealth | null>(null);
   const [interactiveUI, setInteractiveUI] = useState<WsInteractiveUI | null>(
     null,
@@ -167,6 +169,7 @@ export function useSession(): UseSessionReturn {
       case "status":
         if (currentWindowId && msg.window_id === currentWindowId) {
           setStatusText(msg.text);
+          if (msg.context_pct !== null) setContextPct(msg.context_pct);
         }
         break;
 
@@ -203,6 +206,7 @@ export function useSession(): UseSessionReturn {
   const clearSessionState = useCallback(() => {
     setMessages([]);
     setStatusText("");
+    setContextPct(null);
     setInteractiveUI(null);
     setDecisionGrid(null);
   }, []);
@@ -212,6 +216,7 @@ export function useSession(): UseSessionReturn {
     activeWindowId,
     messages,
     statusText,
+    contextPct,
     health,
     interactiveUI,
     decisionGrid,

@@ -18,6 +18,7 @@ import {
 } from "./components/CommandPalette";
 import type { ClientSendKey, ClientSubmitDecisions } from "./protocol";
 import { useResponsive } from "./hooks/useResponsive";
+import { useNotifications } from "./hooks/useNotifications";
 
 function App() {
   const {
@@ -25,6 +26,7 @@ function App() {
     activeWindowId,
     messages,
     statusText,
+    contextPct,
     health,
     interactiveUI,
     decisionGrid,
@@ -38,6 +40,16 @@ function App() {
 
   const { status, send } = useWebSocket(handleServerMessage);
   const { isTablet } = useResponsive();
+  const { notify } = useNotifications();
+
+  // Notify on interactive UI or status changes when tab not focused
+  const prevInteractiveRef = useRef(interactiveUI);
+  useEffect(() => {
+    if (interactiveUI && interactiveUI !== prevInteractiveRef.current) {
+      notify("Claude needs input", interactiveUI.ui_name);
+    }
+    prevInteractiveRef.current = interactiveUI;
+  }, [interactiveUI, notify]);
 
   const [showDirectoryPicker, setShowDirectoryPicker] = useState(false);
   const [wikiPath, setWikiPath] = useState<string | null>(null);
@@ -145,6 +157,44 @@ function App() {
     },
     [send, clearDecisionGrid],
   );
+
+  const handleRenameSession = useCallback(
+    async (windowId: string, newName: string) => {
+      try {
+        await fetch(
+          `/api/sessions/${encodeURIComponent(windowId)}/rename`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: newName }),
+          },
+        );
+      } catch {
+        console.error("Rename failed");
+      }
+    },
+    [],
+  );
+
+  const handleExport = useCallback(async () => {
+    if (!activeWindowId) return;
+    try {
+      const resp = await fetch(
+        `/api/sessions/${encodeURIComponent(activeWindowId)}/export?fmt=markdown`,
+      );
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download =
+        resp.headers.get("Content-Disposition")?.split("filename=")[1]?.replace(/"/g, "") ||
+        "export.md";
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      console.error("Export failed");
+    }
+  }, [activeWindowId]);
 
   const handleScreenshot = useCallback(async () => {
     if (!activeWindowId) return;
@@ -297,6 +347,7 @@ function App() {
               setSidebarOpen(false);
             }}
             onKillSession={handleKillSession}
+            onRenameSession={handleRenameSession}
             onOpenWiki={() => {
               setWikiPath("index.md");
               setSidebarOpen(false);
@@ -338,7 +389,12 @@ function App() {
                 disabled={status !== "connected"}
               />
             </MessageInput>
-            <StatusBar statusText={statusText} connectionStatus={status} />
+            <StatusBar
+              statusText={statusText}
+              contextPct={contextPct}
+              connectionStatus={status}
+              onExport={handleExport}
+            />
           </>
         ) : (
           <div

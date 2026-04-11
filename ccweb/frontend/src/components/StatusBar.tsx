@@ -2,10 +2,23 @@ import type { ConnectionStatus } from "../hooks/useWebSocket";
 
 interface StatusBarProps {
   statusText: string;
+  contextPct: number | null;
   connectionStatus: ConnectionStatus;
+  onExport?: () => void;
 }
 
-export function StatusBar({ statusText, connectionStatus }: StatusBarProps) {
+function contextColor(pct: number): string {
+  if (pct < 50) return "var(--success)";
+  if (pct < 80) return "var(--warning)";
+  return "var(--error)";
+}
+
+export function StatusBar({
+  statusText,
+  contextPct,
+  connectionStatus,
+  onExport,
+}: StatusBarProps) {
   const statusColors: Record<ConnectionStatus, string> = {
     connected: "var(--success)",
     connecting: "var(--warning)",
@@ -39,6 +52,29 @@ export function StatusBar({ statusText, connectionStatus }: StatusBarProps) {
         {connectionStatus === "connected"
           ? statusText || "Ready"
           : connectionStatus}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        {contextPct !== null && (
+          <span style={{ color: contextColor(contextPct) }}>
+            Context: {contextPct}%
+          </span>
+        )}
+        {onExport && (
+          <button
+            onClick={onExport}
+            style={{
+              background: "none",
+              border: "none",
+              color: "var(--text-muted)",
+              cursor: "pointer",
+              fontSize: 11,
+              padding: "2px 4px",
+              fontFamily: "inherit",
+            }}
+          >
+            Export
+          </button>
+        )}
       </div>
     </div>
   );

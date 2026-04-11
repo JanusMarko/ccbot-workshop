@@ -47,6 +47,7 @@ export interface WsStatus {
   type: "status";
   window_id: string;
   text: string;
+  context_pct: number | null;
 }
 
 export interface WsSessions {
