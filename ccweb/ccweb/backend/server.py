@@ -556,7 +556,8 @@ def create_app() -> FastAPI:
         return h.to_dict()
 
     # Serve static frontend files (production)
-    static_dir = Path(__file__).parent.parent / "frontend" / "dist"
+    # __file__ is ccweb/ccweb/backend/server.py → .parent.parent.parent = ccweb/
+    static_dir = Path(__file__).parent.parent.parent / "frontend" / "dist"
     if static_dir.exists():
         app.mount("/", StaticFiles(directory=str(static_dir), html=True))
 

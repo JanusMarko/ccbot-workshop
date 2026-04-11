@@ -181,7 +181,7 @@ def main() -> None:
 
     args = sys.argv[1:]
 
-    if not args or args[0] not in ("install", "hook"):
+    if not args:
         _cmd_serve()
     elif args[0] == "install":
         _cmd_install()
