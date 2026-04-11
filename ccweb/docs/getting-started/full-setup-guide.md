@@ -161,15 +161,32 @@ cd ~/ccweb
 
 ### Install the Python backend
 
+Modern Ubuntu/WSL protects the system Python and won't let you install packages globally. Use a virtual environment:
+
 ```bash
+# Create a virtual environment
+python3 -m venv ~/.ccweb-venv
+
+# Activate it
+source ~/.ccweb-venv/bin/activate
+
+# Install CCWeb
 pip install -e .
 ```
 
-Or with uv:
+**Make the venv activate automatically** so `ccweb` is always available:
+
+```bash
+echo 'source ~/.ccweb-venv/bin/activate' >> ~/.bashrc
+```
+
+**Alternative: using uv** (if you installed it in Part 1):
 
 ```bash
 uv pip install -e .
 ```
+
+uv handles virtual environments automatically.
 
 ### Install the SessionStart hook and global commands
 
@@ -181,18 +198,11 @@ This does two things:
 1. Adds the `SessionStart` hook to `~/.claude/settings.json` — this is how CCWeb tracks which Claude Code session is running in which tmux window
 2. Installs global slash commands (`/option-grid`, `/checklist`, `/status-report`, `/confirm`) to `~/.claude/commands/`
 
-### Install the frontend dependencies
+### Install and build the frontend
 
 ```bash
 cd frontend
 npm install
-cd ..
-```
-
-### Build the frontend for production
-
-```bash
-cd frontend
 npm run build
 cd ..
 ```
@@ -203,19 +213,19 @@ This creates `frontend/dist/` which the backend serves as static files.
 
 ## Part 5: Run CCWeb
 
-### Make sure tmux is running
+CCWeb needs two things running: a **tmux session** (where Claude Code windows live) and the **CCWeb server** (the web interface). Here's the step-by-step:
+
+### Step 1: Start tmux
 
 ```bash
-tmux ls
+tmux new -s ccbot
 ```
 
-You should see `ccbot` in the list. If not:
+You're now inside the tmux session. This is where Claude Code sessions will run.
 
-```bash
-tmux new -s ccbot -d    # Create detached
-```
+### Step 2: Start the CCWeb server
 
-### Start the CCWeb server
+Inside tmux, start the server:
 
 ```bash
 ccweb
@@ -228,7 +238,36 @@ INFO:     CCWeb started on 0.0.0.0:8765
 INFO:     Uvicorn running on http://0.0.0.0:8765
 ```
 
-The server is now running. Keep this terminal open (or run in the background with `ccweb &` or via a systemd service).
+### Step 3: Open in your browser
+
+Open Chrome on Windows and go to:
+
+```
+http://localhost:8765
+```
+
+WSL automatically forwards ports, so `localhost:8765` reaches the CCWeb server inside WSL. You should see the CCWeb interface with a sidebar and "Select a session or create a new one".
+
+### Step 4: Create your first session
+
+Click **+ New** in the sidebar, browse to a project directory, and click **Create Session**. Claude Code will start in a new tmux window and you can begin chatting.
+
+### tmux window management
+
+The CCWeb server runs in one tmux window. Claude Code sessions each run in their own windows. Useful tmux shortcuts:
+
+| Keys | Action |
+|------|--------|
+| `Ctrl+B, C` | Create a new tmux window (you won't need this — CCWeb creates them) |
+| `Ctrl+B, N` | Next window |
+| `Ctrl+B, P` | Previous window |
+| `Ctrl+B, 0` | Go to window 0 (where CCWeb server runs) |
+| `Ctrl+B, D` | Detach from tmux (everything keeps running in background) |
+| `tmux attach -t ccbot` | Reattach to the session later |
+
+### Stopping CCWeb
+
+Press `Ctrl+C` in the tmux window running `ccweb` to stop the server. Your Claude Code sessions keep running in their tmux windows — CCWeb is just the interface.
 
 ### Running as a background service (optional)
 

@@ -1,10 +1,12 @@
 ---
 title: Installation
-description: Prerequisites and setup instructions for CCWeb
+description: Quick install steps for CCWeb
 order: 1
 ---
 
 # Installation
+
+Quick install for those who already have WSL, tmux, and Claude Code set up. For a complete from-scratch guide, see the [Full Setup Guide](full-setup-guide.md).
 
 ## Prerequisites
 
@@ -17,7 +19,16 @@ order: 1
 
 ```bash
 cd ccweb
+
+# Create a virtual environment (required on modern Ubuntu/WSL)
+python3 -m venv ~/.ccweb-venv
+source ~/.ccweb-venv/bin/activate
+
+# Install
 pip install -e .
+
+# Make the venv auto-activate on login
+echo 'source ~/.ccweb-venv/bin/activate' >> ~/.bashrc
 ```
 
 ## Install Hook & Commands
@@ -30,7 +41,16 @@ This installs:
 - The `SessionStart` hook in `~/.claude/settings.json`
 - Global slash commands (`/option-grid`, `/checklist`, `/status-report`, `/confirm`) in `~/.claude/commands/`
 
-## Configure
+## Build the Frontend
+
+```bash
+cd frontend
+npm install
+npm run build
+cd ..
+```
+
+## Configure (optional)
 
 Create `~/.ccweb/.env` with your settings:
 
@@ -42,14 +62,14 @@ TMUX_SESSION_NAME=ccbot
 
 See [Environment Variables](../configuration/env-variables.md) for the full reference.
 
-## Start
+## Run
 
 ```bash
-# Start tmux session first
+# Start tmux
 tmux new -s ccbot
 
-# In another terminal, start CCWeb
+# Inside tmux, start CCWeb
 ccweb
 ```
 
-Open your browser to `http://localhost:8765`.
+Open Chrome to `http://localhost:8765`.
