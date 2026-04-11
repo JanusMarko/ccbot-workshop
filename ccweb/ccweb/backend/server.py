@@ -244,9 +244,12 @@ async def _check_decision_grids(client_id: str, window_id: str, ws: WebSocket) -
             grid_data = json.loads(grid_file.read_text())
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Invalid grid file %s: %s", grid_file, e)
-            failed_dir = pending_dir.parent / "failed"
-            failed_dir.mkdir(exist_ok=True)
-            grid_file.rename(failed_dir / grid_file.name)
+            try:
+                failed_dir = pending_dir.parent / "failed"
+                failed_dir.mkdir(exist_ok=True)
+                grid_file.rename(failed_dir / grid_file.name)
+            except FileNotFoundError:
+                pass  # File already moved by another handler
             continue
 
         sent.add(file_key)
@@ -285,26 +288,26 @@ async def _status_poll_loop() -> None:
                     continue
 
                 # Check for interactive UI (with dedup)
-                if is_interactive_ui(pane_text):
-                    content = extract_interactive_content(pane_text)
-                    if content:
-                        dedup_key = (client_id, window_id)
-                        if _last_interactive_content.get(dedup_key) == content.content:
-                            continue  # Same UI, don't re-send
-                        _last_interactive_content[dedup_key] = content.content
+                # Single call — is_interactive_ui internally calls extract too
+                content = extract_interactive_content(pane_text)
+                if content:
+                    dedup_key = (client_id, window_id)
+                    if _last_interactive_content.get(dedup_key) == content.content:
+                        continue  # Same UI, don't re-send
+                    _last_interactive_content[dedup_key] = content.content
 
-                        parsed = parse_interactive_ui(content.content, content.name)
-                        ui_msg = WsInteractiveUI(
-                            window_id=window_id,
-                            ui_name=content.name,
-                            raw_content=content.content,
-                            structured=parsed.to_dict() if parsed else None,
-                        )
-                        try:
-                            await ws.send_json(ui_msg.to_dict())
-                        except Exception as e:
-                            logger.debug("WebSocket send failed: %s", e)
-                        continue
+                    parsed = parse_interactive_ui(content.content, content.name)
+                    ui_msg = WsInteractiveUI(
+                        window_id=window_id,
+                        ui_name=content.name,
+                        raw_content=content.content,
+                        structured=parsed.to_dict() if parsed else None,
+                    )
+                    try:
+                        await ws.send_json(ui_msg.to_dict())
+                    except Exception as e:
+                        logger.debug("WebSocket send failed: %s", e)
+                    continue
                 else:
                     # No interactive UI — clear dedup cache
                     _last_interactive_content.pop((client_id, window_id), None)
@@ -344,6 +347,8 @@ async def _handle_ws_message(
         return
 
     if msg_type == CLIENT_SWITCH_SESSION:
+        if not window_id:
+            return
         _client_bindings[client_id] = window_id
         # Send history for the new session
         from .session import session_manager
