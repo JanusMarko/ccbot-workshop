@@ -6,8 +6,9 @@ import { MessageStream } from "./components/MessageStream";
 import { MessageInput } from "./components/MessageInput";
 import { StatusBar } from "./components/StatusBar";
 import { InteractiveUI } from "./components/InteractiveUI";
+import { DecisionGrid } from "./components/DecisionGrid";
 import { FilterBar } from "./components/FilterBar";
-import type { ClientSendKey } from "./protocol";
+import type { ClientSendKey, ClientSubmitDecisions } from "./protocol";
 
 function App() {
   const {
@@ -17,10 +18,12 @@ function App() {
     statusText,
     health,
     interactiveUI,
+    decisionGrid,
     filter,
     setFilter,
     handleServerMessage,
     setActiveWindowId,
+    clearDecisionGrid,
   } = useSession();
 
   const { status, send } = useWebSocket(handleServerMessage);
@@ -70,6 +73,14 @@ function App() {
     if (!activeWindowId) return;
     send({ type: "send_key", window_id: activeWindowId, key: "Escape" });
   }, [send, activeWindowId]);
+
+  const handleSubmitDecisions = useCallback(
+    (submission: ClientSubmitDecisions) => {
+      send(submission);
+      clearDecisionGrid();
+    },
+    [send, clearDecisionGrid],
+  );
 
   const filteredMessages = filterMessages(messages, filter);
 
@@ -133,6 +144,15 @@ function App() {
           </div>
         )}
       </div>
+
+      {/* Decision grid overlay */}
+      {decisionGrid && (
+        <DecisionGrid
+          grid={decisionGrid}
+          onSubmit={handleSubmitDecisions}
+          onDismiss={clearDecisionGrid}
+        />
+      )}
     </div>
   );
 }

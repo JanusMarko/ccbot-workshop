@@ -1,4 +1,4 @@
-import type { ConnectionStatus } from "./types";
+import type { ConnectionStatus } from "../hooks/useWebSocket";
 
 interface StatusBarProps {
   statusText: string;

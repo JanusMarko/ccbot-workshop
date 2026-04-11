@@ -1,8 +1,9 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type {
   HistoryMessage,
   ServerMessage,
   SessionInfo,
+  WsDecisionGrid,
   WsHealth,
   WsInteractiveUI,
   WsMessage,
@@ -27,10 +28,12 @@ interface UseSessionReturn {
   statusText: string;
   health: WsHealth | null;
   interactiveUI: WsInteractiveUI | null;
+  decisionGrid: WsDecisionGrid | null;
   filter: MessageFilter;
   setFilter: (f: MessageFilter) => void;
   handleServerMessage: (msg: ServerMessage) => void;
   setActiveWindowId: (id: string | null) => void;
+  clearDecisionGrid: () => void;
 }
 
 let msgCounter = 0;
@@ -68,60 +71,84 @@ export function useSession(): UseSessionReturn {
   const [interactiveUI, setInteractiveUI] = useState<WsInteractiveUI | null>(
     null,
   );
+  const [decisionGrid, setDecisionGrid] = useState<WsDecisionGrid | null>(
+    null,
+  );
   const [filter, setFilter] = useState<MessageFilter>("all");
 
-  const handleServerMessage = useCallback(
-    (msg: ServerMessage) => {
-      switch (msg.type) {
-        case "health":
-          setHealth(msg);
-          break;
+  // Use a ref to avoid stale closures in the message handler.
+  // The handler is called synchronously from the WebSocket onmessage,
+  // which may fire between a setState and the next render.
+  const activeWindowIdRef = useRef(activeWindowId);
+  activeWindowIdRef.current = activeWindowId;
 
-        case "sessions":
-          setSessions(msg.sessions);
-          break;
+  const handleServerMessage = useCallback((msg: ServerMessage) => {
+    const currentWindowId = activeWindowIdRef.current;
 
-        case "history":
-          setMessages(msg.messages.map(historyToDisplay));
+    switch (msg.type) {
+      case "health":
+        setHealth(msg);
+        break;
+
+      case "sessions":
+        setSessions(msg.sessions);
+        break;
+
+      case "history":
+        // Gate by window_id to prevent wrong session's history overwriting
+        // the display after rapid session switching
+        if (
+          "window_id" in msg &&
+          currentWindowId &&
+          msg.window_id !== currentWindowId
+        ) {
+          break;
+        }
+        setMessages(msg.messages.map(historyToDisplay));
+        setInteractiveUI(null);
+        break;
+
+      case "message":
+        if (currentWindowId && msg.window_id === currentWindowId) {
+          setMessages((prev) => [...prev, wsMessageToDisplay(msg)]);
           setInteractiveUI(null);
-          break;
+        }
+        break;
 
-        case "message":
-          if (activeWindowId && msg.window_id === activeWindowId) {
-            setMessages((prev) => [...prev, wsMessageToDisplay(msg)]);
-            // Any non-interactive message clears the interactive UI
-            setInteractiveUI(null);
-          }
-          break;
+      case "status":
+        if (currentWindowId && msg.window_id === currentWindowId) {
+          setStatusText(msg.text);
+        }
+        break;
 
-        case "status":
-          if (activeWindowId && msg.window_id === activeWindowId) {
-            setStatusText(msg.text);
-          }
-          break;
+      case "interactive_ui":
+        if (currentWindowId && msg.window_id === currentWindowId) {
+          setInteractiveUI(msg);
+          setStatusText("");
+        }
+        break;
 
-        case "interactive_ui":
-          if (activeWindowId && msg.window_id === activeWindowId) {
-            setInteractiveUI(msg);
-            setStatusText("");
-          }
-          break;
+      case "decision_grid":
+        if (currentWindowId && msg.window_id === currentWindowId) {
+          setDecisionGrid(msg);
+        }
+        break;
 
-        case "send_ack":
-          // Could show a delivery confirmation — for now just clear status
-          break;
+      case "send_ack":
+        break;
 
-        case "error":
-          console.error(`[CCWeb Error] ${msg.code}: ${msg.message}`);
-          break;
+      case "error":
+        console.error(`[CCWeb Error] ${msg.code}: ${msg.message}`);
+        break;
 
-        case "pong":
-          // Keepalive response — no action needed
-          break;
-      }
-    },
-    [activeWindowId],
-  );
+      case "pong":
+        break;
+    }
+  }, []); // No deps — uses ref for activeWindowId
+
+  const clearDecisionGrid = useCallback(() => {
+    setDecisionGrid(null);
+  }, []);
 
   return {
     sessions,
@@ -130,10 +157,12 @@ export function useSession(): UseSessionReturn {
     statusText,
     health,
     interactiveUI,
+    decisionGrid,
     filter,
     setFilter,
     handleServerMessage,
     setActiveWindowId,
+    clearDecisionGrid,
   };
 }
 
