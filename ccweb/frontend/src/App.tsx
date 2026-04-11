@@ -43,6 +43,14 @@ function App() {
   const [wikiPath, setWikiPath] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  // On connect/reconnect: re-send switch_session for restored/active session
+  // so the server knows which session to stream messages for
+  useEffect(() => {
+    if (status === "connected" && activeWindowId) {
+      send({ type: "switch_session", window_id: activeWindowId });
+    }
+  }, [status, activeWindowId, send]);
+
   // Fetch project skills when active session changes
   const [projectCommands, setProjectCommands] = useState<CommandItem[]>([]);
   useEffect(() => {
@@ -97,10 +105,11 @@ function App() {
     (windowId: string) => {
       send({ type: "kill_session", window_id: windowId });
       if (activeWindowId === windowId) {
+        clearSessionState(); // Clear messages, interactive UI, AND decision grid
         setActiveWindowId(null);
       }
     },
-    [send, activeWindowId, setActiveWindowId],
+    [send, activeWindowId, setActiveWindowId, clearSessionState],
   );
 
   const handleSendText = useCallback(
