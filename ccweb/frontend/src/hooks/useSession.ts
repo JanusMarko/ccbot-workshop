@@ -124,9 +124,24 @@ export function useSession(): UseSessionReturn {
         setHealth(msg);
         break;
 
-      case "sessions":
+      case "sessions": {
         setSessions(msg.sessions);
+        // Clear active session if it's no longer in the list (killed externally)
+        const wid = activeWindowIdRef.current;
+        if (wid && !msg.sessions.some((s) => s.window_id === wid)) {
+          setActiveWindowIdState(null);
+          try {
+            localStorage.removeItem("ccweb_last_session");
+          } catch {
+            // localStorage unavailable
+          }
+          setMessages([]);
+          setStatusText("");
+          setInteractiveUI(null);
+          setDecisionGrid(null);
+        }
         break;
+      }
 
       case "history":
         // Gate by window_id to prevent wrong session's history overwriting
