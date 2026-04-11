@@ -44,7 +44,10 @@ function App() {
       setProjectCommands([]);
       return;
     }
-    fetch(`/api/sessions/${encodeURIComponent(activeWindowId)}/skills`)
+    const controller = new AbortController();
+    fetch(`/api/sessions/${encodeURIComponent(activeWindowId)}/skills`, {
+      signal: controller.signal,
+    })
       .then((r) => r.json())
       .then((skills: Array<{ name: string; description: string }>) => {
         setProjectCommands(
@@ -55,7 +58,10 @@ function App() {
           })),
         );
       })
-      .catch(() => setProjectCommands([]));
+      .catch(() => {
+        if (!controller.signal.aborted) setProjectCommands([]);
+      });
+    return () => controller.abort();
   }, [activeWindowId]);
 
   const allCommands = useMemo(

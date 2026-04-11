@@ -81,11 +81,14 @@ export function CommandPalette({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [visible, handleKeyDown]);
 
-  // Scroll selected item into view
+  // Scroll selected item into view (use data attribute, not child index,
+  // because group headers shift child indices)
   useEffect(() => {
     const list = listRef.current;
     if (!list) return;
-    const item = list.children[selectedIndex] as HTMLElement | undefined;
+    const item = list.querySelector(
+      `[data-cmd-index="${selectedIndex}"]`,
+    ) as HTMLElement | null;
     item?.scrollIntoView({ block: "nearest" });
   }, [selectedIndex]);
 
@@ -133,6 +136,7 @@ export function CommandPalette({
               <CommandRow
                 key={cmd.name}
                 cmd={cmd}
+                index={globalIdx}
                 selected={globalIdx === selectedIndex}
                 onClick={() => onSelect(cmd.name)}
               />
@@ -161,6 +165,7 @@ export function CommandPalette({
               <CommandRow
                 key={cmd.name}
                 cmd={cmd}
+                index={globalIdx}
                 selected={globalIdx === selectedIndex}
                 onClick={() => onSelect(cmd.name)}
               />
@@ -176,13 +181,16 @@ function CommandRow({
   cmd,
   selected,
   onClick,
+  index,
 }: {
   cmd: CommandItem;
   selected: boolean;
   onClick: () => void;
+  index: number;
 }) {
   return (
     <div
+      data-cmd-index={index}
       onClick={onClick}
       style={{
         padding: "8px 12px",
