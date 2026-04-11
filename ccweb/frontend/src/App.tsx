@@ -17,6 +17,7 @@ import {
   type CommandItem,
 } from "./components/CommandPalette";
 import type { ClientSendKey, ClientSubmitDecisions } from "./protocol";
+import { useResponsive } from "./hooks/useResponsive";
 
 function App() {
   const {
@@ -36,9 +37,11 @@ function App() {
   } = useSession();
 
   const { status, send } = useWebSocket(handleServerMessage);
+  const { isTablet } = useResponsive();
 
   const [showDirectoryPicker, setShowDirectoryPicker] = useState(false);
   const [wikiPath, setWikiPath] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Fetch project skills when active session changes
   const [projectCommands, setProjectCommands] = useState<CommandItem[]>([]);
@@ -77,6 +80,7 @@ function App() {
       clearSessionState();
       setActiveWindowId(windowId);
       send({ type: "switch_session", window_id: windowId });
+      setSidebarOpen(false); // Close drawer on tablet after selection
     },
     [send, setActiveWindowId, clearSessionState],
   );
@@ -172,24 +176,87 @@ function App() {
         overflow: "hidden",
       }}
     >
-      {/* Sidebar — wiki or sessions */}
-      {wikiPath !== null ? (
-        <WikiSidebar
-          activePath={wikiPath}
-          onNavigate={setWikiPath}
-          onClose={() => setWikiPath(null)}
-        />
-      ) : (
-        <SessionSidebar
-          sessions={sessions}
-          activeWindowId={activeWindowId}
-          health={health}
-          onSelectSession={handleSelectSession}
-          onCreateSession={() => setShowDirectoryPicker(true)}
-          onKillSession={handleKillSession}
-          onOpenWiki={() => setWikiPath("index.md")}
-        />
+      {/* Sidebar — responsive drawer on tablet, fixed on desktop */}
+      {isTablet && (
+        <>
+          {/* Hamburger button */}
+          <button
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            style={{
+              position: "fixed",
+              top: 8,
+              left: 8,
+              zIndex: 200,
+              width: 44,
+              height: 44,
+              background: "var(--bg-surface)",
+              color: "var(--text-primary)",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              cursor: "pointer",
+              fontSize: 20,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            {sidebarOpen ? "\u2715" : "\u2630"}
+          </button>
+          {/* Backdrop */}
+          {sidebarOpen && (
+            <div
+              onClick={() => setSidebarOpen(false)}
+              style={{
+                position: "fixed",
+                inset: 0,
+                background: "rgba(0,0,0,0.5)",
+                zIndex: 99,
+              }}
+            />
+          )}
+        </>
       )}
+      <div
+        style={{
+          position: isTablet ? "fixed" : "relative",
+          left: isTablet ? (sidebarOpen ? 0 : -300) : 0,
+          top: 0,
+          height: "100%",
+          zIndex: isTablet ? 100 : "auto",
+          transition: isTablet ? "left 0.2s ease" : "none",
+          flexShrink: 0,
+        }}
+      >
+        {wikiPath !== null ? (
+          <WikiSidebar
+            activePath={wikiPath}
+            onNavigate={(p) => {
+              setWikiPath(p);
+              setSidebarOpen(false);
+            }}
+            onClose={() => {
+              setWikiPath(null);
+              setSidebarOpen(false);
+            }}
+          />
+        ) : (
+          <SessionSidebar
+            sessions={sessions}
+            activeWindowId={activeWindowId}
+            health={health}
+            onSelectSession={handleSelectSession}
+            onCreateSession={() => {
+              setShowDirectoryPicker(true);
+              setSidebarOpen(false);
+            }}
+            onKillSession={handleKillSession}
+            onOpenWiki={() => {
+              setWikiPath("index.md");
+              setSidebarOpen(false);
+            }}
+          />
+        )}
+      </div>
 
       {/* Main content — wiki or session */}
       <div
@@ -198,6 +265,8 @@ function App() {
           display: "flex",
           flexDirection: "column",
           minWidth: 0,
+          marginLeft: isTablet ? 0 : undefined,
+          paddingTop: isTablet ? 52 : 0, // Space for hamburger button
         }}
       >
         {wikiPath !== null ? (

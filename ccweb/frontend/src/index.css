@@ -43,3 +43,23 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
 }
+
+/* Responsive: ensure touch-friendly button sizes on tablet */
+@media (max-width: 1024px) {
+  button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  textarea {
+    font-size: 16px; /* Prevents iOS auto-zoom on focus */
+  }
+
+  /* Let the virtual keyboard push content up */
+  html {
+    height: -webkit-fill-available;
+  }
+  body {
+    min-height: -webkit-fill-available;
+  }
+}
