@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { filterMessages, useSession } from "./hooks/useSession";
 import { SessionSidebar } from "./components/SessionSidebar";
@@ -58,7 +58,10 @@ function App() {
       .catch(() => setProjectCommands([]));
   }, [activeWindowId]);
 
-  const allCommands = [...projectCommands, ...BUILTIN_COMMANDS];
+  const allCommands = useMemo(
+    () => [...projectCommands, ...BUILTIN_COMMANDS],
+    [projectCommands],
+  );
 
   const handleSelectSession = useCallback(
     (windowId: string) => {

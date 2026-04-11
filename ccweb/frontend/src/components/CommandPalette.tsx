@@ -63,7 +63,9 @@ export function CommandPalette({
         setSelectedIndex((prev) => Math.max(prev - 1, 0));
       } else if (e.key === "Enter" && filtered.length > 0) {
         e.preventDefault();
-        onSelect(filtered[selectedIndex].name);
+        // Clamp to prevent out-of-bounds if filter shrank the list
+        const idx = Math.min(selectedIndex, filtered.length - 1);
+        onSelect(filtered[idx].name);
       } else if (e.key === "Escape") {
         e.preventDefault();
         onClose();
@@ -72,10 +74,12 @@ export function CommandPalette({
     [visible, filtered, selectedIndex, onSelect, onClose],
   );
 
+  // Only register global keydown when palette is visible
   useEffect(() => {
+    if (!visible) return;
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleKeyDown]);
+  }, [visible, handleKeyDown]);
 
   // Scroll selected item into view
   useEffect(() => {
