@@ -1,8 +1,8 @@
 """WebSocket protocol message types for CCWeb.
 
 Defines the bidirectional JSON message format between the FastAPI backend
-and the React frontend. Server→Client messages deliver Claude output,
-interactive UIs, status updates, and session lists. Client→Server messages
+and the React frontend. Server->Client messages deliver Claude output,
+interactive UIs, status updates, and session lists. Client->Server messages
 send user text, key presses, decision grid submissions, and session commands.
 
 All messages are JSON objects with a "type" field for dispatch.
@@ -110,11 +110,34 @@ class WsError:
 
 
 @dataclass
-class WsReplay:
-    """Message replay after client reconnection."""
+class WsPong:
+    """Keepalive response."""
 
-    type: str = "replay"
+    type: str = "pong"
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class WsHistory:
+    """Message history for a session."""
+
+    type: str = "history"
+    window_id: str = ""
     messages: list[dict[str, Any]] = field(default_factory=list)
+    total: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class WsSendAck:
+    """Acknowledgment that text was sent to Claude."""
+
+    type: str = "send_ack"
+    window_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -131,5 +154,4 @@ CLIENT_CREATE_SESSION = "create_session"
 CLIENT_KILL_SESSION = "kill_session"
 CLIENT_SWITCH_SESSION = "switch_session"
 CLIENT_GET_HISTORY = "get_history"
-CLIENT_REPLAY_REQUEST = "replay_request"
 CLIENT_PING = "ping"

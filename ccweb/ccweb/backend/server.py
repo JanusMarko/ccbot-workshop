@@ -48,8 +48,11 @@ from .ws_protocol import (
     WsDecisionGrid,
     WsError,
     WsHealth,
+    WsHistory,
     WsInteractiveUI,
     WsMessage,
+    WsPong,
+    WsSendAck,
     WsSessions,
     WsStatus,
 )
@@ -150,8 +153,8 @@ async def _broadcast_sessions() -> None:
     for ws in list(_clients.values()):
         try:
             await ws.send_json(msg)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("WebSocket send failed: %s", e)
 
 
 # ── Message callback (from SessionMonitor) ───────────────────────────────
@@ -190,8 +193,8 @@ async def _handle_new_message(msg: NewMessage) -> None:
         )
         try:
             await ws.send_json(ws_msg.to_dict())
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("WebSocket send failed: %s", e)
 
 
 # ── Status polling ───────────────────────────────────────────────────────
@@ -307,7 +310,7 @@ async def _handle_ws_message(
     window_id = data.get("window_id", "")
 
     if msg_type == CLIENT_PING:
-        await ws.send_json({"type": "pong"})
+        await ws.send_json(WsPong().to_dict())
         return
 
     if msg_type == CLIENT_SWITCH_SESSION:
@@ -317,12 +320,7 @@ async def _handle_ws_message(
 
         messages, total = await session_manager.get_recent_messages(window_id)
         await ws.send_json(
-            {
-                "type": "history",
-                "window_id": window_id,
-                "messages": messages,
-                "total": total,
-            }
+            WsHistory(window_id=window_id, messages=messages, total=total).to_dict()
         )
         return
 
@@ -333,7 +331,7 @@ async def _handle_ws_message(
 
             success, message = await session_manager.send_to_window(window_id, text)
             if success:
-                await ws.send_json({"type": "send_ack", "window_id": window_id})
+                await ws.send_json(WsSendAck(window_id=window_id).to_dict())
             else:
                 await ws.send_json(
                     WsError(code="send_failed", message=message).to_dict()
@@ -545,8 +543,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Shutdown
     if _status_task:
         _status_task.cancel()
+        try:
+            await _status_task
+        except asyncio.CancelledError:
+            pass
     if _monitor:
         _monitor.stop()
+    # Clear module-level state
+    _clients.clear()
+    _client_bindings.clear()
+    _sent_grid_files.clear()
     logger.info("CCWeb stopped")
 
 
