@@ -5,24 +5,33 @@ import { CommandPalette } from "./CommandPalette";
 interface MessageInputProps {
   onSend: (text: string) => void;
   onEscape: () => void;
+  onScreenshot?: () => void;
   commands: CommandItem[];
   disabled?: boolean;
+  children?: React.ReactNode; // Slot for FileUpload button
 }
 
 export function MessageInput({
   onSend,
   onEscape,
+  onScreenshot,
   commands,
   disabled,
+  children,
 }: MessageInputProps) {
   const [text, setText] = useState("");
   const [showPalette, setShowPalette] = useState(false);
   const [slashFilter, setSlashFilter] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Command history
+  const historyRef = useRef<string[]>([]);
+  const historyIndexRef = useRef(-1);
 
   const handleSubmit = useCallback(() => {
     const trimmed = text.trim();
     if (!trimmed) return;
+    historyRef.current.push(trimmed);
+    historyIndexRef.current = -1;
     onSend(trimmed);
     setText("");
     setShowPalette(false);
@@ -46,6 +55,32 @@ export function MessageInput({
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       handleSubmit();
+      return;
+    }
+    // Command history: Ctrl+Up / Ctrl+Down
+    if (e.key === "ArrowUp" && e.ctrlKey) {
+      e.preventDefault();
+      const hist = historyRef.current;
+      if (hist.length === 0) return;
+      const idx = historyIndexRef.current;
+      const newIdx = idx < 0 ? hist.length - 1 : Math.max(0, idx - 1);
+      historyIndexRef.current = newIdx;
+      setText(hist[newIdx]);
+      return;
+    }
+    if (e.key === "ArrowDown" && e.ctrlKey) {
+      e.preventDefault();
+      const hist = historyRef.current;
+      const idx = historyIndexRef.current;
+      if (idx < 0) return;
+      if (idx >= hist.length - 1) {
+        historyIndexRef.current = -1;
+        setText("");
+      } else {
+        historyIndexRef.current = idx + 1;
+        setText(hist[idx + 1]);
+      }
+      return;
     }
   };
 
@@ -120,6 +155,24 @@ export function MessageInput({
         >
           / Commands
         </button>
+        {onScreenshot && (
+          <button
+            onClick={onScreenshot}
+            title="Terminal screenshot"
+            style={{
+              padding: "4px 10px",
+              background: "var(--bg-surface)",
+              color: "var(--text-secondary)",
+              border: "1px solid var(--border)",
+              borderRadius: 4,
+              cursor: "pointer",
+              fontSize: 12,
+            }}
+          >
+            Screenshot
+          </button>
+        )}
+        {children}
       </div>
 
       {/* Input area with command palette */}

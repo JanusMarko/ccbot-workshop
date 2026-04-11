@@ -1,4 +1,3 @@
-import { useState } from "react";
 import type { SessionInfo } from "../protocol";
 import type { WsHealth } from "../protocol";
 
@@ -7,7 +6,7 @@ interface SessionSidebarProps {
   activeWindowId: string | null;
   health: WsHealth | null;
   onSelectSession: (windowId: string) => void;
-  onCreateSession: (workDir: string, name?: string) => void;
+  onCreateSession: () => void;
   onKillSession: (windowId: string) => void;
 }
 
@@ -46,18 +45,6 @@ export function SessionSidebar({
   onCreateSession,
   onKillSession,
 }: SessionSidebarProps) {
-  const [showNewSession, setShowNewSession] = useState(false);
-  const [newPath, setNewPath] = useState("");
-
-  const handleCreate = () => {
-    if (!newPath.trim()) return;
-    const parts = newPath.trim().split("/");
-    const name = parts[parts.length - 1];
-    onCreateSession(newPath.trim(), name);
-    setNewPath("");
-    setShowNewSession(false);
-  };
-
   return (
     <div
       style={{
@@ -82,7 +69,7 @@ export function SessionSidebar({
       >
         <span style={{ fontWeight: 700, fontSize: 15 }}>CCWeb</span>
         <button
-          onClick={() => setShowNewSession(!showNewSession)}
+          onClick={onCreateSession}
           style={{
             background: "var(--accent)",
             color: "#1e1e2e",
@@ -101,73 +88,7 @@ export function SessionSidebar({
       {/* Health warnings */}
       {health && <HealthBanner health={health} />}
 
-      {/* New session form */}
-      {showNewSession && (
-        <div
-          style={{
-            padding: "8px 12px",
-            borderBottom: "1px solid var(--border)",
-          }}
-        >
-          <input
-            type="text"
-            value={newPath}
-            onChange={(e) => setNewPath(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleCreate()}
-            placeholder="/path/to/project"
-            autoFocus
-            style={{
-              width: "100%",
-              padding: "6px 8px",
-              background: "var(--bg-primary)",
-              color: "var(--text-primary)",
-              border: "1px solid var(--border)",
-              borderRadius: 4,
-              fontSize: 13,
-              fontFamily: "inherit",
-              outline: "none",
-              marginBottom: 6,
-            }}
-          />
-          <div style={{ display: "flex", gap: 6 }}>
-            <button
-              onClick={handleCreate}
-              disabled={!newPath.trim()}
-              style={{
-                flex: 1,
-                padding: "4px 8px",
-                background: newPath.trim()
-                  ? "var(--accent)"
-                  : "var(--bg-surface)",
-                color: newPath.trim() ? "#1e1e2e" : "var(--text-muted)",
-                border: "none",
-                borderRadius: 4,
-                cursor: newPath.trim() ? "pointer" : "default",
-                fontSize: 12,
-              }}
-            >
-              Create
-            </button>
-            <button
-              onClick={() => {
-                setShowNewSession(false);
-                setNewPath("");
-              }}
-              style={{
-                padding: "4px 8px",
-                background: "var(--bg-surface)",
-                color: "var(--text-secondary)",
-                border: "none",
-                borderRadius: 4,
-                cursor: "pointer",
-                fontSize: 12,
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
+      {/* New session form is now handled by DirectoryPicker overlay in App.tsx */}
 
       {/* Session list */}
       <div style={{ flex: 1, overflowY: "auto" }}>

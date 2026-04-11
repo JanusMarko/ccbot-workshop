@@ -202,6 +202,18 @@ export function MessageStream({ messages }: MessageStreamProps) {
             </div>
           )}
           <MessageContent msg={msg} />
+          {msg.images && msg.images.length > 0 && (
+            <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {msg.images.map((img, i) => (
+                <img
+                  key={i}
+                  src={`data:${img.media_type};base64,${img.data}`}
+                  alt="Tool result"
+                  style={{ maxWidth: "100%", maxHeight: 400, borderRadius: 6 }}
+                />
+              ))}
+            </div>
+          )}
         </div>
       ))}
       <div ref={bottomRef} />

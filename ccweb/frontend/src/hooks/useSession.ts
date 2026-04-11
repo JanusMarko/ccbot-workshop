@@ -19,6 +19,7 @@ export interface DisplayMessage {
   toolUseId: string | null;
   toolName: string | null;
   timestamp: string | null;
+  images?: Array<{ media_type: string; data: string }>;
 }
 
 interface UseSessionReturn {
@@ -60,6 +61,7 @@ function wsMessageToDisplay(msg: WsMessage): DisplayMessage {
     toolUseId: msg.tool_use_id,
     toolName: msg.tool_name,
     timestamp: msg.timestamp,
+    images: msg.images,
   };
 }
 

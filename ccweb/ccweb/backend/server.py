@@ -24,7 +24,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
 
 from .config import config
@@ -183,6 +184,19 @@ async def _handle_new_message(msg: NewMessage) -> None:
         if state.session_id != msg.session_id:
             continue
 
+        # Convert image_data to base64 dicts for JSON serialization
+        import base64
+
+        images: list[dict[str, str]] = []
+        if msg.image_data:
+            for media_type, raw_bytes in msg.image_data:
+                images.append(
+                    {
+                        "media_type": media_type,
+                        "data": base64.b64encode(raw_bytes).decode("ascii"),
+                    }
+                )
+
         ws_msg = WsMessage(
             window_id=window_id,
             role=msg.role,
@@ -190,6 +204,7 @@ async def _handle_new_message(msg: NewMessage) -> None:
             text=msg.text,
             tool_use_id=msg.tool_use_id,
             tool_name=msg.tool_name,
+            images=images,
         )
         try:
             await ws.send_json(ws_msg.to_dict())
@@ -646,6 +661,51 @@ def create_app() -> FastAPI:
 
         parent = str(target.parent) if target != target.parent else None
         return {"path": str(target), "parent": parent, "dirs": dirs}
+
+    @app.post("/api/sessions/{window_id}/upload")
+    async def upload_file(window_id: str, file: UploadFile) -> dict[str, str]:
+        """Upload a file to the session's docs/inbox/ directory."""
+        from .session import session_manager
+
+        state = session_manager.lookup_window_state(window_id)
+        if not state or not state.cwd:
+            return {"error": "Session not found or cwd unknown"}
+
+        inbox = Path(state.cwd) / "docs" / "inbox"
+        inbox.mkdir(parents=True, exist_ok=True)
+
+        filename = file.filename or "unnamed"
+        dest = inbox / filename
+        if dest.exists():
+            stem = Path(filename).stem
+            ext = Path(filename).suffix
+            import time as _time
+
+            dest = inbox / f"{stem}_{int(_time.time())}{ext}"
+
+        content = await file.read()
+        dest.write_bytes(content)
+
+        rel_path = f"docs/inbox/{dest.name}"
+        notice = (
+            f"A file has been saved to {rel_path} "
+            f"(absolute path: {dest}). Read it with your Read tool."
+        )
+        success, msg = await session_manager.send_to_window(window_id, notice)
+        if not success:
+            return {"error": msg, "path": str(dest)}
+        return {"path": str(dest), "relative": rel_path}
+
+    @app.get("/api/sessions/{window_id}/screenshot")
+    async def screenshot(window_id: str) -> Response:
+        """Capture the tmux pane as text."""
+        w = await tmux_manager.find_window_by_id(window_id)
+        if not w:
+            return Response(content="Window not found", status_code=404)
+        pane_text = await tmux_manager.capture_pane(w.window_id, with_ansi=False)
+        if not pane_text:
+            return Response(content="Failed to capture pane", status_code=500)
+        return Response(content=pane_text, media_type="text/plain")
 
     # Serve static frontend files (production)
     # __file__ is ccweb/ccweb/backend/server.py → .parent.parent.parent = ccweb/

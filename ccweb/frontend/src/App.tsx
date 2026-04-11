@@ -8,6 +8,8 @@ import { StatusBar } from "./components/StatusBar";
 import { InteractiveUI } from "./components/InteractiveUI";
 import { DecisionGrid } from "./components/DecisionGrid";
 import { FilterBar } from "./components/FilterBar";
+import { FileUpload } from "./components/FileUpload";
+import { DirectoryPicker } from "./components/DirectoryPicker";
 import {
   BUILTIN_COMMANDS,
   type CommandItem,
@@ -32,6 +34,8 @@ function App() {
   } = useSession();
 
   const { status, send } = useWebSocket(handleServerMessage);
+
+  const [showDirectoryPicker, setShowDirectoryPicker] = useState(false);
 
   // Fetch project skills when active session changes
   const [projectCommands, setProjectCommands] = useState<CommandItem[]>([]);
@@ -58,7 +62,7 @@ function App() {
 
   const handleSelectSession = useCallback(
     (windowId: string) => {
-      clearSessionState(); // Clear stale messages/UI before switching
+      clearSessionState();
       setActiveWindowId(windowId);
       send({ type: "switch_session", window_id: windowId });
     },
@@ -68,6 +72,7 @@ function App() {
   const handleCreateSession = useCallback(
     (workDir: string, name?: string) => {
       send({ type: "create_session", work_dir: workDir, name });
+      setShowDirectoryPicker(false);
     },
     [send],
   );
@@ -111,6 +116,39 @@ function App() {
     [send, clearDecisionGrid],
   );
 
+  const handleScreenshot = useCallback(async () => {
+    if (!activeWindowId) return;
+    try {
+      const resp = await fetch(
+        `/api/sessions/${encodeURIComponent(activeWindowId)}/screenshot`,
+      );
+      const text = await resp.text();
+      // Open in new window as pre-formatted text
+      const w = window.open("", "_blank");
+      if (w) {
+        w.document.write(
+          `<pre style="background:#1e1e2e;color:#cdd6f4;padding:20px;font-family:monospace">${text.replace(/</g, "&lt;")}</pre>`,
+        );
+      }
+    } catch {
+      console.error("Screenshot failed");
+    }
+  }, [activeWindowId]);
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Ctrl+K: toggle command palette (handled by MessageInput focus)
+      // Ctrl+N: new session
+      if (e.key === "n" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        setShowDirectoryPicker(true);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
   const filteredMessages = filterMessages(messages, filter);
 
   return (
@@ -128,7 +166,7 @@ function App() {
         activeWindowId={activeWindowId}
         health={health}
         onSelectSession={handleSelectSession}
-        onCreateSession={handleCreateSession}
+        onCreateSession={() => setShowDirectoryPicker(true)}
         onKillSession={handleKillSession}
       />
 
@@ -151,9 +189,15 @@ function App() {
             <MessageInput
               onSend={handleSendText}
               onEscape={handleEscape}
+              onScreenshot={handleScreenshot}
               commands={allCommands}
               disabled={status !== "connected"}
-            />
+            >
+              <FileUpload
+                windowId={activeWindowId}
+                disabled={status !== "connected"}
+              />
+            </MessageInput>
             <StatusBar statusText={statusText} connectionStatus={status} />
           </>
         ) : (
@@ -175,13 +219,19 @@ function App() {
         )}
       </div>
 
-      {/* Decision grid overlay */}
+      {/* Overlays */}
       {decisionGrid && (
         <DecisionGrid
           key={decisionGrid.grid.id}
           grid={decisionGrid}
           onSubmit={handleSubmitDecisions}
           onDismiss={clearDecisionGrid}
+        />
+      )}
+      {showDirectoryPicker && (
+        <DirectoryPicker
+          onSelect={handleCreateSession}
+          onCancel={() => setShowDirectoryPicker(false)}
         />
       )}
     </div>

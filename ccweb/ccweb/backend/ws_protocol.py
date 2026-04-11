@@ -29,9 +29,15 @@ class WsMessage:
     tool_use_id: str | None = None
     tool_name: str | None = None
     timestamp: str | None = None
+    # Base64-encoded images from tool_result: list of {media_type, data}
+    images: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        # Omit empty images to save bandwidth
+        if not d["images"]:
+            del d["images"]
+        return d
 
 
 @dataclass

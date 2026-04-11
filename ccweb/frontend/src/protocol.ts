@@ -11,6 +11,7 @@ export interface WsMessage {
   tool_use_id: string | null;
   tool_name: string | null;
   timestamp: string | null;
+  images?: Array<{ media_type: string; data: string }>;
 }
 
 export interface WsInteractiveUI {
