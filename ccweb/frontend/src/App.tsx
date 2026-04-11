@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { filterMessages, useSession } from "./hooks/useSession";
 import { SessionSidebar } from "./components/SessionSidebar";
@@ -8,6 +8,10 @@ import { StatusBar } from "./components/StatusBar";
 import { InteractiveUI } from "./components/InteractiveUI";
 import { DecisionGrid } from "./components/DecisionGrid";
 import { FilterBar } from "./components/FilterBar";
+import {
+  BUILTIN_COMMANDS,
+  type CommandItem,
+} from "./components/CommandPalette";
 import type { ClientSendKey, ClientSubmitDecisions } from "./protocol";
 
 function App() {
@@ -28,6 +32,29 @@ function App() {
   } = useSession();
 
   const { status, send } = useWebSocket(handleServerMessage);
+
+  // Fetch project skills when active session changes
+  const [projectCommands, setProjectCommands] = useState<CommandItem[]>([]);
+  useEffect(() => {
+    if (!activeWindowId) {
+      setProjectCommands([]);
+      return;
+    }
+    fetch(`/api/sessions/${encodeURIComponent(activeWindowId)}/skills`)
+      .then((r) => r.json())
+      .then((skills: Array<{ name: string; description: string }>) => {
+        setProjectCommands(
+          skills.map((s) => ({
+            name: s.name,
+            description: s.description,
+            group: "project" as const,
+          })),
+        );
+      })
+      .catch(() => setProjectCommands([]));
+  }, [activeWindowId]);
+
+  const allCommands = [...projectCommands, ...BUILTIN_COMMANDS];
 
   const handleSelectSession = useCallback(
     (windowId: string) => {
@@ -124,6 +151,7 @@ function App() {
             <MessageInput
               onSend={handleSendText}
               onEscape={handleEscape}
+              commands={allCommands}
               disabled={status !== "connected"}
             />
             <StatusBar statusText={statusText} connectionStatus={status} />

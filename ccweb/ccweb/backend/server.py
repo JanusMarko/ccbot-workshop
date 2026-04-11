@@ -597,6 +597,56 @@ def create_app() -> FastAPI:
         h = await _build_health()
         return h.to_dict()
 
+    @app.get("/api/sessions/{window_id}/skills")
+    async def get_skills(window_id: str) -> list[dict[str, str]]:
+        """Discover slash commands available in the session's project."""
+        from .session import session_manager
+
+        state = session_manager.lookup_window_state(window_id)
+        if not state or not state.cwd:
+            return []
+
+        skills: list[dict[str, str]] = []
+        commands_dir = Path(state.cwd) / ".claude" / "commands"
+        if commands_dir.exists():
+            for f in sorted(commands_dir.iterdir()):
+                if f.suffix == ".md" and f.is_file():
+                    name = f.stem
+                    # First non-empty line of the file is the description
+                    desc = ""
+                    try:
+                        for line in f.read_text(encoding="utf-8").splitlines():
+                            stripped = line.strip().lstrip("# ").strip()
+                            if stripped:
+                                desc = stripped
+                                break
+                    except OSError:
+                        pass
+                    skills.append({"name": name, "description": desc})
+        return skills
+
+    @app.get("/api/browse")
+    async def browse_directory(path: str = "") -> dict[str, Any]:
+        """Browse directories for session creation."""
+        browse_path = path or config.browse_root or str(Path.home())
+        target = Path(browse_path).expanduser().resolve()
+        if not target.is_dir():
+            return {"path": str(target), "dirs": [], "error": "Not a directory"}
+
+        dirs: list[dict[str, str]] = []
+        try:
+            for entry in sorted(target.iterdir()):
+                if not entry.is_dir():
+                    continue
+                if entry.name.startswith(".") and not config.show_hidden_dirs:
+                    continue
+                dirs.append({"name": entry.name, "path": str(entry)})
+        except PermissionError:
+            return {"path": str(target), "dirs": [], "error": "Permission denied"}
+
+        parent = str(target.parent) if target != target.parent else None
+        return {"path": str(target), "parent": parent, "dirs": dirs}
+
     # Serve static frontend files (production)
     # __file__ is ccweb/ccweb/backend/server.py → .parent.parent.parent = ccweb/
     static_dir = Path(__file__).parent.parent.parent / "frontend" / "dist"

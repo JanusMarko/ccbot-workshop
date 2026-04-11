@@ -1,13 +1,23 @@
 import { useCallback, useRef, useState } from "react";
+import type { CommandItem } from "./CommandPalette";
+import { CommandPalette } from "./CommandPalette";
 
 interface MessageInputProps {
   onSend: (text: string) => void;
   onEscape: () => void;
+  commands: CommandItem[];
   disabled?: boolean;
 }
 
-export function MessageInput({ onSend, onEscape, disabled }: MessageInputProps) {
+export function MessageInput({
+  onSend,
+  onEscape,
+  commands,
+  disabled,
+}: MessageInputProps) {
   const [text, setText] = useState("");
+  const [showPalette, setShowPalette] = useState(false);
+  const [slashFilter, setSlashFilter] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const handleSubmit = useCallback(() => {
@@ -15,27 +25,52 @@ export function MessageInput({ onSend, onEscape, disabled }: MessageInputProps) 
     if (!trimmed) return;
     onSend(trimmed);
     setText("");
-    // Reset textarea height
+    setShowPalette(false);
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
   }, [text, onSend]);
 
+  const handleSelectCommand = useCallback(
+    (name: string) => {
+      const cmd = `/${name}`;
+      onSend(cmd);
+      setText("");
+      setShowPalette(false);
+      textareaRef.current?.focus();
+    },
+    [onSend],
+  );
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    // Ctrl/Cmd+Enter to submit
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       handleSubmit();
     }
   };
 
-  // Auto-resize textarea
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setText(e.target.value);
+    const val = e.target.value;
+    setText(val);
+
+    // Show palette when typing / at the start of a line
+    const lines = val.split("\n");
+    const lastLine = lines[lines.length - 1];
+    if (lastLine.startsWith("/")) {
+      setShowPalette(true);
+      setSlashFilter(lastLine.slice(1));
+    } else {
+      setShowPalette(false);
+    }
+
     const el = e.target;
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 200) + "px";
   };
+
+  const handleClosePalette = useCallback(() => {
+    setShowPalette(false);
+  }, []);
 
   return (
     <div
@@ -66,17 +101,43 @@ export function MessageInput({ onSend, onEscape, disabled }: MessageInputProps) 
         >
           Esc
         </button>
+        <button
+          onClick={() => {
+            setShowPalette(!showPalette);
+            setSlashFilter("");
+            textareaRef.current?.focus();
+          }}
+          title="Commands"
+          style={{
+            padding: "4px 10px",
+            background: showPalette ? "var(--accent)" : "var(--bg-surface)",
+            color: showPalette ? "#1e1e2e" : "var(--text-secondary)",
+            border: "1px solid var(--border)",
+            borderRadius: 4,
+            cursor: "pointer",
+            fontSize: 12,
+          }}
+        >
+          / Commands
+        </button>
       </div>
 
-      {/* Input area */}
-      <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+      {/* Input area with command palette */}
+      <div style={{ position: "relative", display: "flex", gap: 8, alignItems: "flex-end" }}>
+        <CommandPalette
+          commands={commands}
+          filter={slashFilter}
+          visible={showPalette}
+          onSelect={handleSelectCommand}
+          onClose={handleClosePalette}
+        />
         <textarea
           ref={textareaRef}
           value={text}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
           disabled={disabled}
-          placeholder="Type a message... (Ctrl+Enter to send)"
+          placeholder="Type a message... (/ for commands, Ctrl+Enter to send)"
           rows={1}
           style={{
             flex: 1,
@@ -98,9 +159,7 @@ export function MessageInput({ onSend, onEscape, disabled }: MessageInputProps) 
           disabled={disabled || !text.trim()}
           style={{
             padding: "8px 20px",
-            background: text.trim()
-              ? "var(--accent)"
-              : "var(--bg-surface)",
+            background: text.trim() ? "var(--accent)" : "var(--bg-surface)",
             color: text.trim() ? "#1e1e2e" : "var(--text-muted)",
             border: "none",
             borderRadius: 8,
