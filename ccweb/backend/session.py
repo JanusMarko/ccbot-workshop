@@ -223,9 +223,14 @@ class SessionManager:
     # --- Window state management ---
 
     def get_window_state(self, window_id: str) -> WindowState:
+        """Get or create window state (use for write paths like load_session_map)."""
         if window_id not in self.window_states:
             self.window_states[window_id] = WindowState()
         return self.window_states[window_id]
+
+    def lookup_window_state(self, window_id: str) -> WindowState | None:
+        """Look up window state without creating it (use for read-only checks)."""
+        return self.window_states.get(window_id)
 
     # --- Window → Session resolution ---
 
@@ -367,17 +372,6 @@ class SessionManager:
             for e in parsed_entries
         ]
         return all_messages, len(all_messages)
-
-    async def find_clients_for_session(
-        self,
-        session_id: str,
-    ) -> list[str]:
-        """Find all window_ids whose session matches the given session_id."""
-        result: list[str] = []
-        for window_id, state in self.window_states.items():
-            if state.session_id == session_id:
-                result.append(window_id)
-        return result
 
 
 # Singleton

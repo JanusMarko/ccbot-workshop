@@ -43,7 +43,9 @@ from .ws_protocol import (
     CLIENT_PING,
     CLIENT_SEND_KEY,
     CLIENT_SEND_TEXT,
+    CLIENT_SUBMIT_DECISIONS,
     CLIENT_SWITCH_SESSION,
+    WsDecisionGrid,
     WsError,
     WsHealth,
     WsInteractiveUI,
@@ -166,8 +168,9 @@ async def _handle_new_message(msg: NewMessage) -> None:
             continue
 
         # Check if this window's session matches the message's session
-        state = session_manager.get_window_state(window_id)
-        if state.session_id != msg.session_id:
+        # Use lookup (no auto-create) to avoid phantom state entries
+        state = session_manager.lookup_window_state(window_id)
+        if not state or state.session_id != msg.session_id:
             continue
 
         ws_msg = WsMessage(
@@ -186,9 +189,51 @@ async def _handle_new_message(msg: NewMessage) -> None:
 
 # ── Status polling ───────────────────────────────────────────────────────
 
+# Track grid files already sent to frontend (avoid re-sending)
+_sent_grid_files: set[str] = set()
+
+
+async def _check_decision_grids(window_id: str, ws: WebSocket) -> None:
+    """Check for new decision grid files in .ccweb/pending/ for a window."""
+    from .session import session_manager
+
+    state = session_manager.lookup_window_state(window_id)
+    if not state or not state.cwd:
+        return
+
+    pending_dir = Path(state.cwd) / ".ccweb" / "pending"
+    if not pending_dir.exists():
+        return
+
+    for grid_file in pending_dir.glob("*.json"):
+        file_key = str(grid_file)
+        if file_key in _sent_grid_files:
+            continue
+
+        try:
+            grid_data = json.loads(grid_file.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Invalid grid file %s: %s", grid_file, e)
+            # Move to failed/
+            failed_dir = pending_dir.parent / "failed"
+            failed_dir.mkdir(exist_ok=True)
+            grid_file.rename(failed_dir / grid_file.name)
+            continue
+
+        _sent_grid_files.add(file_key)
+        grid_msg = WsDecisionGrid(
+            window_id=window_id,
+            grid=grid_data,
+        )
+        try:
+            await ws.send_json(grid_msg.to_dict())
+            logger.info("Sent decision grid to client: %s", grid_file.name)
+        except Exception:
+            _sent_grid_files.discard(file_key)
+
 
 async def _status_poll_loop() -> None:
-    """Poll terminal status for all active windows at 1-second intervals."""
+    """Poll terminal status and decision grids at 1-second intervals."""
     while True:
         try:
             for client_id, window_id in list(_client_bindings.items()):
@@ -199,6 +244,9 @@ async def _status_poll_loop() -> None:
                 w = await tmux_manager.find_window_by_id(window_id)
                 if not w:
                     continue
+
+                # Check for decision grid files
+                await _check_decision_grids(window_id, ws)
 
                 pane_text = await tmux_manager.capture_pane(w.window_id)
                 if not pane_text:
@@ -286,18 +334,20 @@ async def _handle_ws_message(
     if msg_type == CLIENT_SEND_KEY:
         key = data.get("key", "")
         if key and window_id:
-            # Stale UI guard: verify interactive UI is still showing
-            w = await tmux_manager.find_window_by_id(window_id)
-            if w:
-                pane_text = await tmux_manager.capture_pane(w.window_id)
-                if pane_text and not is_interactive_ui(pane_text):
-                    await ws.send_json(
-                        WsError(
-                            code="stale_ui",
-                            message="This prompt has expired.",
-                        ).to_dict()
-                    )
-                    return
+            # Escape is always allowed — it's the interrupt key
+            # Other keys get a stale UI guard to prevent blind key injection
+            if key != "Escape":
+                w = await tmux_manager.find_window_by_id(window_id)
+                if w:
+                    pane_text = await tmux_manager.capture_pane(w.window_id)
+                    if pane_text and not is_interactive_ui(pane_text):
+                        await ws.send_json(
+                            WsError(
+                                code="stale_ui",
+                                message="This prompt has expired.",
+                            ).to_dict()
+                        )
+                        return
 
             # Map key names to tmux send_keys parameters
             key_map: dict[str, tuple[str, bool, bool]] = {
@@ -357,6 +407,48 @@ async def _handle_ws_message(
                     "total": total,
                 }
             )
+        return
+
+    if msg_type == CLIENT_SUBMIT_DECISIONS:
+        selections = data.get("selections", [])
+        grid_title = data.get("title", "Decisions")
+        if selections and window_id:
+            # Format selections as text for Claude
+            lines = [f'Decisions for "{grid_title}":']
+            for sel in selections:
+                topic = sel.get("topic", "")
+                choice = sel.get("choice")
+                notes = sel.get("notes", "")
+                if choice:
+                    lines.append(f"- {topic}: {choice}")
+                    if notes:
+                        lines.append(f'  Note: "{notes}"')
+                elif notes:
+                    lines.append(f'- {topic}: [Custom] "{notes}"')
+                else:
+                    lines.append(f"- {topic}: (no selection)")
+
+            formatted = "\n".join(lines)
+
+            from .session import session_manager
+
+            success, message = await session_manager.send_to_window(
+                window_id, formatted
+            )
+            if not success:
+                await ws.send_json(
+                    WsError(code="send_failed", message=message).to_dict()
+                )
+            else:
+                # Move grid file to completed/
+                state = session_manager.lookup_window_state(window_id)
+                if state and state.cwd:
+                    pending_dir = Path(state.cwd) / ".ccweb" / "pending"
+                    completed_dir = Path(state.cwd) / ".ccweb" / "completed"
+                    completed_dir.mkdir(parents=True, exist_ok=True)
+                    for f in pending_dir.glob("*.json"):
+                        f.rename(completed_dir / f.name)
+                        _sent_grid_files.discard(str(f))
         return
 
     logger.warning("Unknown WebSocket message type: %s", msg_type)
