@@ -69,7 +69,8 @@ All documentation lives in `docs/` and is also rendered in the in-app wiki (clic
 | [V2 Roadmap](docs/architecture/v2-roadmap.md) | Deferred features organized by category |
 | [Deferred Items Grid](docs/architecture/deferred-items.md) | Prioritized grid of all 27 deferred items with effort, usefulness, success probability |
 | [Session History](docs/architecture/session-history.md) | History of the build session — decisions, review process, lessons learned, what a new session needs to know |
-| [Installation](docs/getting-started/installation.md) | Prerequisites, setup, configuration |
+| **[Full Setup Guide](docs/getting-started/full-setup-guide.md)** | **Complete from-scratch setup: WSL, tmux, Claude Code, Tailscale, Android, troubleshooting, uninstall** |
+| [Installation](docs/getting-started/installation.md) | Quick prerequisites and setup |
 | [Quick Start](docs/getting-started/quickstart.md) | First session walkthrough |
 
 ## Configuration
