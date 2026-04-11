@@ -772,12 +772,15 @@ def create_app() -> FastAPI:
     async def get_doc_content(path: str) -> Response:
         """Return raw markdown content for a doc file."""
         target = (docs_dir / path).resolve()
-        # Prevent path traversal
-        if not str(target).startswith(str(docs_dir.resolve())):
+        # Prevent path traversal (is_relative_to is safe against prefix attacks)
+        if not target.is_relative_to(docs_dir.resolve()):
             return Response(content="Forbidden", status_code=403)
-        if not target.exists() or not target.is_file():
+        try:
+            content = target.read_text(encoding="utf-8")
+        except (FileNotFoundError, IsADirectoryError):
             return Response(content="Not found", status_code=404)
-        content = target.read_text(encoding="utf-8")
+        except OSError:
+            return Response(content="Read error", status_code=500)
         # Strip frontmatter before returning
         if content.startswith("---"):
             end = content.find("---", 3)
