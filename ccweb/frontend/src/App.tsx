@@ -151,8 +151,9 @@ function App() {
     }
   }, [activeWindowId]);
 
-  // Ctrl+K toggle counter — changes trigger the palette toggle in MessageInput
-  const [paletteToggle, setPaletteToggle] = useState<boolean | undefined>(
+  // Ctrl+K toggle — counter increments trigger palette open in MessageInput
+  // Uses a counter (not boolean) so StrictMode double-invocation doesn't cancel out
+  const [paletteToggle, setPaletteToggle] = useState<number | undefined>(
     undefined,
   );
 
@@ -165,7 +166,7 @@ function App() {
       }
       if (e.key === "k" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
-        setPaletteToggle((prev) => (prev === undefined ? true : !prev));
+        setPaletteToggle((prev) => (prev ?? 0) + 1);
       }
     };
     window.addEventListener("keydown", handler);

@@ -9,7 +9,7 @@ interface MessageInputProps {
   commands: CommandItem[];
   disabled?: boolean;
   children?: React.ReactNode; // Slot for FileUpload button
-  externalPaletteToggle?: boolean; // Toggled by parent (e.g., Ctrl+K)
+  externalPaletteToggle?: number; // Counter incremented by parent (Ctrl+K)
 }
 
 export function MessageInput({
@@ -29,9 +29,10 @@ export function MessageInput({
   const historyIndexRef = useRef(-1);
 
   // React to external palette toggle (e.g., Ctrl+K from parent)
+  // Uses counter so StrictMode double-invocation sets true twice (idempotent)
   useEffect(() => {
     if (externalPaletteToggle !== undefined) {
-      setShowPalette((prev) => !prev);
+      setShowPalette(true);
       setSlashFilter("");
       textareaRef.current?.focus();
     }

@@ -29,12 +29,16 @@ function getRecentDirs(): string[] {
 }
 
 function addRecentDir(path: string) {
-  const recent = getRecentDirs().filter((d) => d !== path);
-  recent.unshift(path);
-  localStorage.setItem(
-    RECENT_DIRS_KEY,
-    JSON.stringify(recent.slice(0, MAX_RECENT)),
-  );
+  try {
+    const recent = getRecentDirs().filter((d) => d !== path);
+    recent.unshift(path);
+    localStorage.setItem(
+      RECENT_DIRS_KEY,
+      JSON.stringify(recent.slice(0, MAX_RECENT)),
+    );
+  } catch {
+    // localStorage unavailable or at quota
+  }
 }
 
 export function DirectoryPicker({ onSelect, onCancel }: DirectoryPickerProps) {
