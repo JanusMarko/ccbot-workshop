@@ -177,7 +177,7 @@ function App() {
       }}
     >
       {/* Sidebar — responsive drawer on tablet, fixed on desktop */}
-      {isTablet && (
+      {isTablet && !showDirectoryPicker && !decisionGrid && (
         <>
           {/* Hamburger button */}
           <button
